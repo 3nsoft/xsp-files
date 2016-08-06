@@ -1,0 +1,41 @@
+{
+  "name": "xsp-files",
+  "version": "0.5.0",
+  "description": "XSP file format for objects encrypted with NaCl (XSalsa+Poly).",
+  "main": "./dist/lib/index.js",
+  "typings": "./dist/lib/index.d.ts",
+  "scripts": {
+    "gulp": "./node_modules/.bin/gulp"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/3nsoft/xsp-files.git"
+  },
+  "engines": {
+    "node": ">=6.0.0"
+  },
+  "dependencies": {
+    "ecma-nacl": "^2.2.1"
+  },
+  "devDependencies": {
+    "gulp": "github:gulpjs/gulp#4.0",
+    "gulp-shell": "^0.5.2",
+    "gulp-typescript": "^2.13.6",
+    "jasmine": "^2.4.1"
+},
+  "keywords": [
+    "encryption",
+    "high-level",
+    "crypto",
+    "nacl",
+	  "files",
+    "file format"
+  ],
+  "author": {
+    "name": "3NSoft Inc.",
+    "url": "https://3nsoft.com",
+    "email": "hq@3nsoft.com"
+  },
+  "license": "MPL-2.0",
+  "readmeFilename": "README.md"
+}
