@@ -5,7 +5,29 @@
  * if such functionality is needed externally.
  */
 import { arrays } from 'ecma-nacl';
-import * as xsp from './index';
+export interface LocationInSegment {
+    /**
+     * Is a position in a decrypted content of a segment.
+     */
+    pos: number;
+    /**
+     * Segment with a loaction of interest.
+     */
+    seg: {
+        /**
+         * Index that points to the segment in the file.
+         */
+        ind: number;
+        /**
+         * Segment's start in the encrypted file.
+         */
+        start: number;
+        /**
+         * Length of encrypted segment.
+         */
+        len: number;
+    };
+}
 export interface ChainedSegsInfo {
     nonce: Uint8Array;
     numOfSegs: number;
@@ -68,7 +90,7 @@ export declare abstract class SegInfoHolder {
      * @param pos is byte's position index in file content.
      * @return corresponding location in segment with segment's info.
      */
-    locationInSegments(pos: number): xsp.LocationInSegment;
+    locationInSegments(pos: number): LocationInSegment;
     protected packInfoToBytes(): Uint8Array;
     /**
      * @param segInd
@@ -78,62 +100,4 @@ export declare abstract class SegInfoHolder {
     numberOfSegments(): number;
     segmentSize(segInd: number): number;
     segmentsLength(): number;
-}
-export declare class SegReader extends SegInfoHolder implements xsp.SegmentsReader {
-    /**
-     * This is a file key, which should be wipped, after this object
-     * is no longer needed.
-     */
-    private key;
-    private arrFactory;
-    constructor(key: Uint8Array, header: Uint8Array, arrFactory: arrays.Factory);
-    openSeg(seg: Uint8Array, segInd: number): {
-        data: Uint8Array;
-        segLen: number;
-        last?: boolean;
-    };
-    destroy(): void;
-    wrap(): xsp.SegmentsReader;
-}
-export declare class SegWriter extends SegInfoHolder implements xsp.SegmentsWriter {
-    /**
-     * This is a file key, which should be wipped, after this object
-     * is no longer needed.
-     */
-    private key;
-    /**
-     * This is a part of header with encrypted file key.
-     * The sole purpose of this field is to reuse these bytes on writting,
-     * eliminated a need to have a master key encryptor every time, when
-     * header is packed.
-     */
-    private packedKey;
-    private arrFactory;
-    private randomBytes;
-    private headerModified;
-    /**
-     * @param key
-     * @param packedKey
-     * @param header a file's header without (!) packed key's 72 bytes.
-     * Array must contain only header's bytes, as its length is used to decide
-     * how to process it. It should be null for a new writer, and not-null,
-     * when writer is based an existing file's structure.
-     * @param segSizein256bs should be present for a new writer,
-     * otherwise, be null.
-     * @param randomBytes
-     * @param arrFactory
-     */
-    constructor(key: Uint8Array, packedKey: Uint8Array, header: Uint8Array, segSizein256bs: number, randomBytes: (n: number) => Uint8Array, arrFactory: arrays.Factory);
-    private initOfNewWriter(segSize);
-    packSeg(content: Uint8Array, segInd: number): {
-        dataLen: number;
-        seg: Uint8Array;
-    };
-    destroy(): void;
-    reset(): void;
-    packHeader(): Uint8Array;
-    setContentLength(totalSegsLen: number): void;
-    isHeaderModified(): boolean;
-    splice(pos: number, rem: number, ins: number): {};
-    wrap(): xsp.SegmentsWriter;
 }
