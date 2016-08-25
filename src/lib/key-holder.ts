@@ -10,7 +10,12 @@ import { bind } from './binding';
 
 export interface FileKeyHolder {
 	
-	reencryptKey(encr: sbox.Encryptor): void;
+	/**
+	 * @param encr is a file key encryptor, for reencryption
+	 * @param header is original file header
+	 * @return a new file header
+	 */
+	reencryptKey(encr: sbox.Encryptor, header: Uint8Array): Uint8Array;
 	
 	/**
 	 * @param segSizein256bs is a default segment size in 256-byte blocks
@@ -69,8 +74,12 @@ class KeyHolder implements FileKeyHolder {
 		Object.seal(this);
 	}
 	
-	reencryptKey(encr: sbox.Encryptor): void {
+	reencryptKey(encr: sbox.Encryptor, header: Uint8Array): Uint8Array {
 		this.keyPack = encr.pack(this.key);
+		let newHeader = new Uint8Array(header.length);
+		newHeader.set(this.keyPack);
+		newHeader.set(header.subarray(this.keyPack.length), this.keyPack.length);
+		return newHeader;
 	}
 
 	newSegWriter(segSizein256bs: number,
