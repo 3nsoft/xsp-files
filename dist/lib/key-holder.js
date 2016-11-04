@@ -16,8 +16,15 @@ class KeyHolder {
             arrFactory : ecma_nacl_1.arrays.makeFactory());
         Object.seal(this);
     }
-    reencryptKey(encr) {
+    getKey() {
+        return this.key;
+    }
+    reencryptKey(encr, header) {
         this.keyPack = encr.pack(this.key);
+        let newHeader = new Uint8Array(header.length);
+        newHeader.set(this.keyPack);
+        newHeader.set(header.subarray(this.keyPack.length), this.keyPack.length);
+        return newHeader;
     }
     newSegWriter(segSizein256bs, randomBytes) {
         var writer = new writer_1.SegWriter(this.key, this.keyPack, null, segSizein256bs, randomBytes, this.arrFactory);
@@ -55,7 +62,8 @@ class KeyHolder {
             newSegWriter: binding_1.bind(this, this.newSegWriter),
             segWriter: binding_1.bind(this, this.segWriter),
             segReader: binding_1.bind(this, this.segReader),
-            clone: binding_1.bind(this, this.clone)
+            clone: binding_1.bind(this, this.clone),
+            getKey: binding_1.bind(this, this.getKey)
         };
         Object.freeze(wrap);
         return wrap;
@@ -89,4 +97,17 @@ function makeFileKeyHolder(mkeyDecr, header, arrFactory) {
     return kh.wrap();
 }
 exports.makeFileKeyHolder = makeFileKeyHolder;
+/**
+ * @param fkey is a file key.
+ * @param header is an array with file's header. Array can be smaller than whole
+ * header, but it must contain initial file key pack.
+ * @param arrFactory (optional) array factory
+ * @return file key holder with a given key.
+ */
+function makeHolderFor(fkey, header, arrFactory) {
+    var fileKeyPack = new Uint8Array(header.subarray(0, KEY_PACK_LENGTH));
+    var kh = new KeyHolder(fkey, fileKeyPack, arrFactory);
+    return kh.wrap();
+}
+exports.makeHolderFor = makeHolderFor;
 Object.freeze(exports);

@@ -11,7 +11,7 @@ export { generateXSPFileStart, getXSPHeaderOffset,
 	FILE_START, HEADER_FILE_START, SEGMENTS_FILE_START, SEGMENTS_OFFSET }
 	from './file-regalia';
 
-export { FileKeyHolder, makeFileKeyHolder, makeNewFileKeyHolder }
+export { FileKeyHolder, makeFileKeyHolder, makeNewFileKeyHolder, makeHolderFor }
 	from './key-holder';
 
 Object.freeze(exports);

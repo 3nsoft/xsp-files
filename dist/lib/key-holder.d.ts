@@ -2,7 +2,13 @@ import { arrays, secret_box as sbox } from 'ecma-nacl';
 import { SegmentsWriter } from './segments/writer';
 import { SegmentsReader } from './segments/reader';
 export interface FileKeyHolder {
-    reencryptKey(encr: sbox.Encryptor): void;
+    getKey(): Uint8Array;
+    /**
+     * @param encr is a file key encryptor, for reencryption
+     * @param header is original file header
+     * @return a new file header
+     */
+    reencryptKey(encr: sbox.Encryptor, header: Uint8Array): Uint8Array;
     /**
      * @param segSizein256bs is a default segment size in 256-byte blocks
      * @param randomBytes is a function that produces cryptographically strong
@@ -51,3 +57,11 @@ export declare function makeNewFileKeyHolder(mkeyEncr: sbox.Encryptor, randomByt
  * @return file key holder with a key, extracted from a given header.
  */
 export declare function makeFileKeyHolder(mkeyDecr: sbox.Decryptor, header: Uint8Array, arrFactory?: arrays.Factory): FileKeyHolder;
+/**
+ * @param fkey is a file key.
+ * @param header is an array with file's header. Array can be smaller than whole
+ * header, but it must contain initial file key pack.
+ * @param arrFactory (optional) array factory
+ * @return file key holder with a given key.
+ */
+export declare function makeHolderFor(fkey: Uint8Array, header: Uint8Array, arrFactory?: arrays.Factory): FileKeyHolder;

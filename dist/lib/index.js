@@ -13,4 +13,5 @@ exports.SEGMENTS_OFFSET = file_regalia_1.SEGMENTS_OFFSET;
 var key_holder_1 = require('./key-holder');
 exports.makeFileKeyHolder = key_holder_1.makeFileKeyHolder;
 exports.makeNewFileKeyHolder = key_holder_1.makeNewFileKeyHolder;
+exports.makeHolderFor = key_holder_1.makeHolderFor;
 Object.freeze(exports);

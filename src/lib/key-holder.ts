@@ -9,7 +9,9 @@ import { SegmentsReader, SegReader } from './segments/reader';
 import { bind } from './binding';
 
 export interface FileKeyHolder {
-	
+
+	getKey(): Uint8Array;
+
 	/**
 	 * @param encr is a file key encryptor, for reencryption
 	 * @param header is original file header
@@ -73,6 +75,10 @@ class KeyHolder implements FileKeyHolder {
 			arrFactory : arrays.makeFactory());
 		Object.seal(this);
 	}
+
+	getKey(): Uint8Array {
+		return this.key;
+	}
 	
 	reencryptKey(encr: sbox.Encryptor, header: Uint8Array): Uint8Array {
 		this.keyPack = encr.pack(this.key);
@@ -130,7 +136,8 @@ class KeyHolder implements FileKeyHolder {
 			newSegWriter: bind(this, this.newSegWriter),
 			segWriter: bind(this, this.segWriter),
 			segReader: bind(this, this.segReader),
-			clone: bind(this, this.clone)
+			clone: bind(this, this.clone),
+			getKey: bind(this, this.getKey)
 		};
 		Object.freeze(wrap);
 		return wrap;
@@ -166,6 +173,20 @@ export function makeFileKeyHolder(mkeyDecr: sbox.Decryptor, header: Uint8Array,
 	var fileKeyPack = new Uint8Array(header.subarray(0, KEY_PACK_LENGTH));
 	var fileKey = mkeyDecr.open(fileKeyPack);
 	var kh = new KeyHolder(fileKey, fileKeyPack, arrFactory);
+	return kh.wrap();
+}
+
+/**
+ * @param fkey is a file key.
+ * @param header is an array with file's header. Array can be smaller than whole
+ * header, but it must contain initial file key pack.
+ * @param arrFactory (optional) array factory
+ * @return file key holder with a given key.
+ */
+export function makeHolderFor(fkey: Uint8Array, header: Uint8Array,
+		arrFactory?: arrays.Factory): FileKeyHolder {
+	var fileKeyPack = new Uint8Array(header.subarray(0, KEY_PACK_LENGTH));
+	var kh = new KeyHolder(fkey, fileKeyPack, arrFactory);
 	return kh.wrap();
 }
 
