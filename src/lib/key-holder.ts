@@ -59,18 +59,16 @@ export interface FileKeyHolder {
 	
 }
 
-var KEY_PACK_LENGTH = 72;
+export const KEY_PACK_LENGTH = 72;
 
 class KeyHolder implements FileKeyHolder {
 	
-	private key: Uint8Array;
-	private keyPack: Uint8Array;
 	private arrFactory: arrays.Factory;
 	
-	constructor(key: Uint8Array, keyPack: Uint8Array,
+	constructor(
+			private key: Uint8Array,
+			private keyPack: Uint8Array|undefined,
 			arrFactory?: arrays.Factory) {
-		this.key = key;
-		this.keyPack = keyPack;
 		this.arrFactory =  (arrFactory ?
 			arrFactory : arrays.makeFactory());
 		Object.seal(this);
@@ -78,6 +76,10 @@ class KeyHolder implements FileKeyHolder {
 
 	getKey(): Uint8Array {
 		return this.key;
+	}
+
+	isReadOnly(): boolean {
+		return (this.keyPack === undefined);
 	}
 	
 	reencryptKey(encr: sbox.Encryptor, header: Uint8Array): Uint8Array {
@@ -90,8 +92,9 @@ class KeyHolder implements FileKeyHolder {
 
 	newSegWriter(segSizein256bs: number,
 			randomBytes: (n: number) => Uint8Array): SegmentsWriter {
-		var writer = new SegWriter(this.key, this.keyPack,
-			null, segSizein256bs, randomBytes, this.arrFactory);
+		if (this.isReadOnly()) { throw new Error(`Read-only key holder cannot make segments writer.`); }
+		var writer = new SegWriter(this.key, this.keyPack!,
+			undefined, segSizein256bs, randomBytes, this.arrFactory);
 		return writer.wrap();
 	}
 	
@@ -99,7 +102,7 @@ class KeyHolder implements FileKeyHolder {
 			randomBytes: (n: number) => Uint8Array): SegmentsWriter {
 		var writer = new SegWriter(this.key,
 				new Uint8Array(header.subarray(0,KEY_PACK_LENGTH)),
-				header.subarray(KEY_PACK_LENGTH), null,
+				header.subarray(KEY_PACK_LENGTH), undefined,
 				randomBytes, this.arrFactory);
 		return writer.wrap();
 	}
@@ -113,18 +116,21 @@ class KeyHolder implements FileKeyHolder {
 	destroy(): void {
 		if (this.key) {
 			arrays.wipe(this.key);
-			this.key = null;
+			this.key = (undefined as any);
 		}
-		this.keyPack = null;
+		this.keyPack = (undefined as any);
 		if (this.arrFactory) {
 			this.arrFactory.wipeRecycled();
-			this.arrFactory = null;
+			this.arrFactory = (undefined as any);
 		}
 	}
 	
 	clone(arrFactory?: arrays.Factory): FileKeyHolder {
 		var key = new Uint8Array(this.key.length);
 		key.set(this.key);
+		if (!arrFactory) {
+			arrFactory = this.arrFactory;
+		}
 		var kh = new KeyHolder(key, this.keyPack, arrFactory);
 		return kh.wrap();
 	}
@@ -177,6 +183,21 @@ export function makeFileKeyHolder(mkeyDecr: sbox.Decryptor, header: Uint8Array,
 }
 
 /**
+ * @param mkeyDecr master key decryptor, which is used to open file key.
+ * @param header is an array with file's header. Array can be smaller than whole
+ * header, but it must contain initial file key pack.
+ * @param arrFactory (optional) array factory
+ * @return file key holder with a key, extracted from a given header.
+ */
+export function makeReadOnlyFileKeyHolder(mkeyDecr: sbox.Decryptor,
+		header: Uint8Array, arrFactory?: arrays.Factory): FileKeyHolder {
+	var fileKeyPack = new Uint8Array(header.subarray(0, KEY_PACK_LENGTH));
+	var fileKey = mkeyDecr.open(fileKeyPack);
+	var kh = new KeyHolder(fileKey, undefined, arrFactory);
+	return kh.wrap();
+}
+
+/**
  * @param fkey is a file key.
  * @param header is an array with file's header. Array can be smaller than whole
  * header, but it must contain initial file key pack.
@@ -187,6 +208,17 @@ export function makeHolderFor(fkey: Uint8Array, header: Uint8Array,
 		arrFactory?: arrays.Factory): FileKeyHolder {
 	var fileKeyPack = new Uint8Array(header.subarray(0, KEY_PACK_LENGTH));
 	var kh = new KeyHolder(fkey, fileKeyPack, arrFactory);
+	return kh.wrap();
+}
+
+/**
+ * @param fkey is a file key.
+ * @param arrFactory (optional) array factory
+ * @return file key holder with a given key.
+ */
+export function makeReadOnlyHolderFor(fkey: Uint8Array,
+		arrFactory?: arrays.Factory): FileKeyHolder {
+	var kh = new KeyHolder(fkey, undefined, arrFactory);
 	return kh.wrap();
 }
 

@@ -3,11 +3,11 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, you can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
-const ecma_nacl_1 = require('ecma-nacl');
-const writer_1 = require('./segments/writer');
-const reader_1 = require('./segments/reader');
-const binding_1 = require('./binding');
-var KEY_PACK_LENGTH = 72;
+const ecma_nacl_1 = require("ecma-nacl");
+const writer_1 = require("./segments/writer");
+const reader_1 = require("./segments/reader");
+const binding_1 = require("./binding");
+exports.KEY_PACK_LENGTH = 72;
 class KeyHolder {
     constructor(key, keyPack, arrFactory) {
         this.key = key;
@@ -19,6 +19,9 @@ class KeyHolder {
     getKey() {
         return this.key;
     }
+    isReadOnly() {
+        return (this.keyPack === undefined);
+    }
     reencryptKey(encr, header) {
         this.keyPack = encr.pack(this.key);
         let newHeader = new Uint8Array(header.length);
@@ -27,31 +30,37 @@ class KeyHolder {
         return newHeader;
     }
     newSegWriter(segSizein256bs, randomBytes) {
-        var writer = new writer_1.SegWriter(this.key, this.keyPack, null, segSizein256bs, randomBytes, this.arrFactory);
+        if (this.isReadOnly()) {
+            throw new Error(`Read-only key holder cannot make segments writer.`);
+        }
+        var writer = new writer_1.SegWriter(this.key, this.keyPack, undefined, segSizein256bs, randomBytes, this.arrFactory);
         return writer.wrap();
     }
     segWriter(header, randomBytes) {
-        var writer = new writer_1.SegWriter(this.key, new Uint8Array(header.subarray(0, KEY_PACK_LENGTH)), header.subarray(KEY_PACK_LENGTH), null, randomBytes, this.arrFactory);
+        var writer = new writer_1.SegWriter(this.key, new Uint8Array(header.subarray(0, exports.KEY_PACK_LENGTH)), header.subarray(exports.KEY_PACK_LENGTH), undefined, randomBytes, this.arrFactory);
         return writer.wrap();
     }
     segReader(header) {
-        var reader = new reader_1.SegReader(this.key, header.subarray(KEY_PACK_LENGTH), this.arrFactory);
+        var reader = new reader_1.SegReader(this.key, header.subarray(exports.KEY_PACK_LENGTH), this.arrFactory);
         return reader.wrap();
     }
     destroy() {
         if (this.key) {
             ecma_nacl_1.arrays.wipe(this.key);
-            this.key = null;
+            this.key = undefined;
         }
-        this.keyPack = null;
+        this.keyPack = undefined;
         if (this.arrFactory) {
             this.arrFactory.wipeRecycled();
-            this.arrFactory = null;
+            this.arrFactory = undefined;
         }
     }
     clone(arrFactory) {
         var key = new Uint8Array(this.key.length);
         key.set(this.key);
+        if (!arrFactory) {
+            arrFactory = this.arrFactory;
+        }
         var kh = new KeyHolder(key, this.keyPack, arrFactory);
         return kh.wrap();
     }
@@ -91,12 +100,26 @@ exports.makeNewFileKeyHolder = makeNewFileKeyHolder;
  * @return file key holder with a key, extracted from a given header.
  */
 function makeFileKeyHolder(mkeyDecr, header, arrFactory) {
-    var fileKeyPack = new Uint8Array(header.subarray(0, KEY_PACK_LENGTH));
+    var fileKeyPack = new Uint8Array(header.subarray(0, exports.KEY_PACK_LENGTH));
     var fileKey = mkeyDecr.open(fileKeyPack);
     var kh = new KeyHolder(fileKey, fileKeyPack, arrFactory);
     return kh.wrap();
 }
 exports.makeFileKeyHolder = makeFileKeyHolder;
+/**
+ * @param mkeyDecr master key decryptor, which is used to open file key.
+ * @param header is an array with file's header. Array can be smaller than whole
+ * header, but it must contain initial file key pack.
+ * @param arrFactory (optional) array factory
+ * @return file key holder with a key, extracted from a given header.
+ */
+function makeReadOnlyFileKeyHolder(mkeyDecr, header, arrFactory) {
+    var fileKeyPack = new Uint8Array(header.subarray(0, exports.KEY_PACK_LENGTH));
+    var fileKey = mkeyDecr.open(fileKeyPack);
+    var kh = new KeyHolder(fileKey, undefined, arrFactory);
+    return kh.wrap();
+}
+exports.makeReadOnlyFileKeyHolder = makeReadOnlyFileKeyHolder;
 /**
  * @param fkey is a file key.
  * @param header is an array with file's header. Array can be smaller than whole
@@ -105,9 +128,19 @@ exports.makeFileKeyHolder = makeFileKeyHolder;
  * @return file key holder with a given key.
  */
 function makeHolderFor(fkey, header, arrFactory) {
-    var fileKeyPack = new Uint8Array(header.subarray(0, KEY_PACK_LENGTH));
+    var fileKeyPack = new Uint8Array(header.subarray(0, exports.KEY_PACK_LENGTH));
     var kh = new KeyHolder(fkey, fileKeyPack, arrFactory);
     return kh.wrap();
 }
 exports.makeHolderFor = makeHolderFor;
+/**
+ * @param fkey is a file key.
+ * @param arrFactory (optional) array factory
+ * @return file key holder with a given key.
+ */
+function makeReadOnlyHolderFor(fkey, arrFactory) {
+    var kh = new KeyHolder(fkey, undefined, arrFactory);
+    return kh.wrap();
+}
+exports.makeReadOnlyHolderFor = makeReadOnlyHolderFor;
 Object.freeze(exports);

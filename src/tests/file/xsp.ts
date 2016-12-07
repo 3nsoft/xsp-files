@@ -27,13 +27,13 @@ function testSingleChainHeader(dataLen: number, segSizein256bs: number) {
 	var writer = fkeyHolder.newSegWriter(segSizein256bs, getRandom);
 	expect(writer.isHeaderModified()).toBe(true);
 	expect(writer.isEndlessFile()).toBe(true);
-	expect(writer.contentLength()).toBeNull();
-	expect(writer.segmentsLength()).toBeNull();
-	expect(writer.numberOfSegments()).toBeNull();
+	expect(writer.contentLength()).toBeUndefined();
+	expect(writer.segmentsLength()).toBeUndefined();
+	expect(writer.numberOfSegments()).toBeUndefined();
 	writer.setContentLength(dataLen);
 	expect(writer.isEndlessFile()).toBe(false)
 	expect(writer.contentLength()).toBe(dataLen);
-	var segmentsLen = writer.segmentsLength();
+	var segmentsLen = writer.segmentsLength()!;
 	
 	// pack file header
 	expect(writer.isHeaderModified()).toBe(true);
@@ -64,12 +64,12 @@ function testSingleChainHeader(dataLen: number, segSizein256bs: number) {
 	writer.reset();
 	expect(writer.isHeaderModified()).toBe(true);
 	expect(writer.isEndlessFile()).toBe(true);
-	expect(writer.contentLength()).toBeNull();
-	expect(writer.segmentsLength()).toBeNull();
+	expect(writer.contentLength()).toBeUndefined();
+	expect(writer.segmentsLength()).toBeUndefined();
 	
 	// wipe key bytes from memory
 	writer.destroy();
-	writer = null;
+	writer = (undefined as any);
 
 	// combine all parts into one xsp file
 	var fileStart = xsp.generateXSPFileStart(segmentsLen);
@@ -82,10 +82,10 @@ function testSingleChainHeader(dataLen: number, segSizein256bs: number) {
 		offset += fileSegments[i].length;
 	}
 	completeFile.set(fileHeader, offset);
-	fileStart = null;
-	fileHeader = null;
+	fileStart = (undefined as any);
+	fileHeader = (undefined as any);
 	var numOfSegment = fileSegments.length;
-	fileSegments = null;
+	fileSegments = (undefined as any);
 	
 	// Note: at this point completeFile contains xsp file, which
 	// contains both segments and a file header. In some situations single file
@@ -144,9 +144,9 @@ function testEndlessFile(dataLen: number, segSizein256bs: number) {
 	var writer = fkeyHolder.newSegWriter(segSizein256bs, getRandom);
 	expect(writer.isHeaderModified()).toBe(true);
 	expect(writer.isEndlessFile()).toBe(true);
-	expect(writer.contentLength()).toBeNull();
-	expect(writer.segmentsLength()).toBeNull();
-	expect(writer.numberOfSegments()).toBeNull();
+	expect(writer.contentLength()).toBeUndefined();
+	expect(writer.segmentsLength()).toBeUndefined();
+	expect(writer.numberOfSegments()).toBeUndefined();
 	
 	// pack file header
 	var fileHeader = writer.packHeader();
@@ -165,7 +165,7 @@ function testEndlessFile(dataLen: number, segSizein256bs: number) {
 	
 	// wipe key bytes from memory
 	writer.destroy();
-	writer = null;
+	writer = (undefined as any);
 
 	// combine all parts into one xsp file
 	offset = 0;
@@ -182,9 +182,9 @@ function testEndlessFile(dataLen: number, segSizein256bs: number) {
 		offset += fileSegments[i].length;
 	}
 	completeFile.set(fileHeader, offset);
-	fileStart = null;
-	fileHeader = null;
-	fileSegments = null;
+	fileStart = (undefined as any);
+	fileHeader = (undefined as any);
+	fileSegments = (undefined as any);
 	
 	// Note: at this point completeFile contains xsp file, which
 	// contains both segments and a file header. In some situations single file
@@ -195,9 +195,9 @@ function testEndlessFile(dataLen: number, segSizein256bs: number) {
 	var segsEnd = xsp.getXSPHeaderOffset(completeFile);
 	var reader = fkeyHolder.segReader(completeFile.subarray(segsEnd));
 	expect(reader.isEndlessFile()).toBe(true);
-	expect(reader.contentLength()).toBeNull();
-	expect(reader.segmentsLength()).toBeNull();
-	expect(reader.numberOfSegments()).toBeNull();
+	expect(reader.contentLength()).toBeUndefined();
+	expect(reader.segmentsLength()).toBeUndefined();
+	expect(reader.numberOfSegments()).toBeUndefined();
 	offset = xsp.SEGMENTS_OFFSET;
 	var segInd = 0;
 	var dataParts: Uint8Array[] = [];

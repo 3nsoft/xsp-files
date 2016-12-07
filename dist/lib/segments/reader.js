@@ -3,9 +3,9 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, you can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
-const ecma_nacl_1 = require('ecma-nacl');
-const xsp_info_1 = require('./xsp-info');
-const binding_1 = require('../binding');
+const ecma_nacl_1 = require("ecma-nacl");
+const xsp_info_1 = require("./xsp-info");
+const binding_1 = require("../binding");
 class SegReader extends xsp_info_1.SegInfoHolder {
     constructor(key, header, arrFactory) {
         super();
@@ -48,12 +48,12 @@ class SegReader extends xsp_info_1.SegInfoHolder {
     }
     destroy() {
         this.arrFactory.wipe(this.key);
-        this.key = null;
+        this.key = undefined;
         for (var i = 0; i < this.segChains.length; i += 1) {
             this.arrFactory.wipe(this.segChains[i].nonce);
         }
-        this.segChains = null;
-        this.arrFactory = null;
+        this.segChains = undefined;
+        this.arrFactory = undefined;
     }
     wrap() {
         var wrap = {

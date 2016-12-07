@@ -117,25 +117,46 @@ function storeUintIn5Bytes(x: Uint8Array, i: number, u: number): void {
 	x[i+4] = u;
 }
 
-export abstract class SegInfoHolder {
+export interface SegsInfo {
+	
+	/**
+	 * @return true, if this file is endless, and false, otherwise.
+	 */
+	isEndlessFile(): boolean;
+	
+	/**
+	 * @return number of content bytes, incrypted in this file. If file is
+	 * endless, undefined is returned.
+	 */
+	contentLength(): number|undefined;
+	
+	segmentsLength(): number|undefined;
+	
+	segmentSize(segInd: number): number;
+	
+	numberOfSegments(): number|undefined;
+
+}
+
+export abstract class SegInfoHolder implements SegsInfo {
 	
 	/**
 	 * Total length of encrypted segments.
-	 * Endless file has this field set to null.
+	 * Endless file has this field set to undefined.
 	 */
-	protected totalSegsLen: number;
+	protected totalSegsLen: number|undefined;
 	
 	/**
 	 * Total length of content bytes in this file.
-	 * Endless file has this field set to null.
+	 * Endless file has this field set to undefined.
 	 */
-	protected totalContentLen: number;
+	protected totalContentLen: number|undefined;
 	
 	/**
 	 * Total number of segment, for a fast boundary check.
-	 * Endless file has this field set to null.
+	 * Endless file has this field set to undefined.
 	 */
-	protected totalNumOfSegments: number;
+	protected totalNumOfSegments: number|undefined;
 	
 	/**
 	 * Common encrypted segment size.
@@ -147,7 +168,7 @@ export abstract class SegInfoHolder {
 	 * Array with info objects about chains of segments with related nonces.
 	 * This array shall have zero elements, if file is empty.
 	 * If it is an endless file, then a single element shall have
-	 * first segments' nonce, while all other numeric fields shall be null.
+	 * first segments' nonce, while all other numeric fields shall be undefined.
 	 */
 	protected segChains: ChainedSegsInfo[];
 	
@@ -162,13 +183,13 @@ export abstract class SegInfoHolder {
 	protected initForEndlessFile(header: Uint8Array, key: Uint8Array,
 			arrFactory: arrays.Factory): void {
 		header = sbox.formatWN.open(header, key, arrFactory);
-		this.totalSegsLen = null;
-		this.totalContentLen = null;
-		this.totalNumOfSegments = null;
+		this.totalSegsLen = undefined;
+		this.totalContentLen = undefined;
+		this.totalNumOfSegments = undefined;
 		this.segSize = (header[0] << 8);
 		this.segChains = [ {
-			numOfSegs: null,
-			lastSegSize: null,
+			numOfSegs: (undefined as any),
+			lastSegSize: (undefined as any),
 			nonce: new Uint8Array(header.subarray(1, 25))
 		} ];
 		arrFactory.wipe(header);
@@ -235,10 +256,10 @@ export abstract class SegInfoHolder {
 	}
 	
 	isEndlessFile(): boolean {
-		return (this.totalNumOfSegments === null);
+		return (this.totalNumOfSegments === undefined);
 	}
 	
-	contentLength(): number {
+	contentLength(): number|undefined {
 		return this.totalContentLen;
 	}
 	
@@ -344,7 +365,7 @@ export abstract class SegInfoHolder {
 		} else {
 			head = new Uint8Array(6 + 30*this.segChains.length);
 			// 1) pack total segments length
-			storeUintIn5Bytes(head, 0, this.totalSegsLen);
+			storeUintIn5Bytes(head, 0, this.totalSegsLen!);
 			// 2) pack segment common size in 256 chunks
 			head[5] = this.segSize >>> 8;
 			// 3) pack info about chained segments
@@ -394,7 +415,7 @@ export abstract class SegInfoHolder {
 		throw new Error("If we get here, there is an error in the loop above.");
 	}
 	
-	numberOfSegments(): number {
+	numberOfSegments(): number|undefined {
 		return this.totalNumOfSegments;
 	}
 	
@@ -422,7 +443,7 @@ export abstract class SegInfoHolder {
 		throw new Error("If we get here, there is an error in the loop above.");
 	}
 	
-	segmentsLength(): number {
+	segmentsLength(): number|undefined {
 		return this.totalSegsLen;
 	}
 	

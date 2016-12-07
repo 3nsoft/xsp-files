@@ -33,22 +33,36 @@ export interface ChainedSegsInfo {
     numOfSegs: number;
     lastSegSize: number;
 }
-export declare abstract class SegInfoHolder {
+export interface SegsInfo {
+    /**
+     * @return true, if this file is endless, and false, otherwise.
+     */
+    isEndlessFile(): boolean;
+    /**
+     * @return number of content bytes, incrypted in this file. If file is
+     * endless, undefined is returned.
+     */
+    contentLength(): number | undefined;
+    segmentsLength(): number | undefined;
+    segmentSize(segInd: number): number;
+    numberOfSegments(): number | undefined;
+}
+export declare abstract class SegInfoHolder implements SegsInfo {
     /**
      * Total length of encrypted segments.
-     * Endless file has this field set to null.
+     * Endless file has this field set to undefined.
      */
-    protected totalSegsLen: number;
+    protected totalSegsLen: number | undefined;
     /**
      * Total length of content bytes in this file.
-     * Endless file has this field set to null.
+     * Endless file has this field set to undefined.
      */
-    protected totalContentLen: number;
+    protected totalContentLen: number | undefined;
     /**
      * Total number of segment, for a fast boundary check.
-     * Endless file has this field set to null.
+     * Endless file has this field set to undefined.
      */
-    protected totalNumOfSegments: number;
+    protected totalNumOfSegments: number | undefined;
     /**
      * Common encrypted segment size.
      * Odd segments must be smaller than this value.
@@ -58,7 +72,7 @@ export declare abstract class SegInfoHolder {
      * Array with info objects about chains of segments with related nonces.
      * This array shall have zero elements, if file is empty.
      * If it is an endless file, then a single element shall have
-     * first segments' nonce, while all other numeric fields shall be null.
+     * first segments' nonce, while all other numeric fields shall be undefined.
      */
     protected segChains: ChainedSegsInfo[];
     /**
@@ -84,7 +98,7 @@ export declare abstract class SegInfoHolder {
      */
     protected initForFiniteFile(header: Uint8Array, key: Uint8Array, arrFactory: arrays.Factory): void;
     isEndlessFile(): boolean;
-    contentLength(): number;
+    contentLength(): number | undefined;
     setContentLength(totalContentLen: number): void;
     /**
      * @param pos is byte's position index in file content.
@@ -97,7 +111,7 @@ export declare abstract class SegInfoHolder {
      * @return segment's nonce, recyclable after its use.
      */
     protected getSegmentNonce(segInd: number, arrFactory: arrays.Factory): Uint8Array;
-    numberOfSegments(): number;
+    numberOfSegments(): number | undefined;
     segmentSize(segInd: number): number;
-    segmentsLength(): number;
+    segmentsLength(): number | undefined;
 }

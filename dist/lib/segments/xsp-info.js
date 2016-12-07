@@ -9,7 +9,7 @@
  * Exported classes should be used inside xsp library, and must be wrapped,
  * if such functionality is needed externally.
  */
-const ecma_nacl_1 = require('ecma-nacl');
+const ecma_nacl_1 = require("ecma-nacl");
 /**
  * @param x
  * @param i
@@ -85,13 +85,13 @@ class SegInfoHolder {
      */
     initForEndlessFile(header, key, arrFactory) {
         header = ecma_nacl_1.secret_box.formatWN.open(header, key, arrFactory);
-        this.totalSegsLen = null;
-        this.totalContentLen = null;
-        this.totalNumOfSegments = null;
+        this.totalSegsLen = undefined;
+        this.totalContentLen = undefined;
+        this.totalNumOfSegments = undefined;
         this.segSize = (header[0] << 8);
         this.segChains = [{
-                numOfSegs: null,
-                lastSegSize: null,
+                numOfSegs: undefined,
+                lastSegSize: undefined,
                 nonce: new Uint8Array(header.subarray(1, 25))
             }];
         arrFactory.wipe(header);
@@ -156,7 +156,7 @@ class SegInfoHolder {
         }
     }
     isEndlessFile() {
-        return (this.totalNumOfSegments === null);
+        return (this.totalNumOfSegments === undefined);
     }
     contentLength() {
         return this.totalContentLen;

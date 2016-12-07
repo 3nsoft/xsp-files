@@ -4,10 +4,10 @@
  * file, you can obtain one at http://mozilla.org/MPL/2.0/. */
 
 import { arrays, secret_box as sbox } from 'ecma-nacl';
-import { LocationInSegment, SegInfoHolder } from './xsp-info';
+import { LocationInSegment, SegInfoHolder, SegsInfo } from './xsp-info';
 import { bind } from '../binding';
 
-export interface SegmentsWriter {
+export interface SegmentsWriter extends SegsInfo {
 	
 	/**
 	 * @param pos is byte's position index in file content.
@@ -39,16 +39,6 @@ export interface SegmentsWriter {
 	
 	splice(pos: number, rem: number, ins: number);
 	
-	isEndlessFile(): boolean;
-	
-	contentLength(): number;
-	
-	segmentsLength(): number;
-	
-	segmentSize(segInd: number): number;
-	
-	numberOfSegments(): number;
-	
 }
 
 export class SegWriter extends SegInfoHolder implements SegmentsWriter {
@@ -78,15 +68,14 @@ export class SegWriter extends SegInfoHolder implements SegmentsWriter {
 	 * @param packedKey
 	 * @param header a file's header without (!) packed key's 72 bytes.
 	 * Array must contain only header's bytes, as its length is used to decide
-	 * how to process it. It should be null for a new writer, and not-null,
-	 * when writer is based an existing file's structure.
+	 * how to process it. It should be undefined for a new writer.
 	 * @param segSizein256bs should be present for a new writer,
-	 * otherwise, be null.
+	 * otherwise, be undefined.
 	 * @param randomBytes
 	 * @param arrFactory
 	 */
 	constructor(key: Uint8Array, packedKey: Uint8Array,
-			header: Uint8Array, segSizein256bs: number,
+			header: Uint8Array|undefined, segSizein256bs: number|undefined,
 			randomBytes: (n: number) => Uint8Array, arrFactory: arrays.Factory) {
 		super();
 		this.arrFactory = arrFactory;
@@ -123,12 +112,12 @@ export class SegWriter extends SegInfoHolder implements SegmentsWriter {
 	
 	private initOfNewWriter(segSize: number): void {
 		this.segSize = segSize;
-		this.totalContentLen = null;
-		this.totalNumOfSegments = null;
-		this.totalSegsLen = null;
+		this.totalContentLen = undefined;
+		this.totalNumOfSegments = undefined;
+		this.totalSegsLen = undefined;
 		this.segChains = [ {
-			numOfSegs: null,
-			lastSegSize: null,
+			numOfSegs: (undefined as any),
+			lastSegSize: (undefined as any),
 			nonce: this.randomBytes(24)
 		} ];
 	}
@@ -153,12 +142,12 @@ export class SegWriter extends SegInfoHolder implements SegmentsWriter {
 	
 	destroy(): void {
 		this.arrFactory.wipe(this.key);
-		this.key = null;
+		this.key = (undefined as any);
 		for (var i=0; i < this.segChains.length; i+=1) {
 			this.arrFactory.wipe(this.segChains[i].nonce);
 		}
-		this.segChains = null;
-		this.arrFactory = null;
+		this.segChains = (undefined as any);
+		this.arrFactory = (undefined as any);
 	}
 	
 	reset(): void {

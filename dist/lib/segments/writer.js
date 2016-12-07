@@ -3,19 +3,18 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, you can obtain one at http://mozilla.org/MPL/2.0/. */
 "use strict";
-const ecma_nacl_1 = require('ecma-nacl');
-const xsp_info_1 = require('./xsp-info');
-const binding_1 = require('../binding');
+const ecma_nacl_1 = require("ecma-nacl");
+const xsp_info_1 = require("./xsp-info");
+const binding_1 = require("../binding");
 class SegWriter extends xsp_info_1.SegInfoHolder {
     /**
      * @param key
      * @param packedKey
      * @param header a file's header without (!) packed key's 72 bytes.
      * Array must contain only header's bytes, as its length is used to decide
-     * how to process it. It should be null for a new writer, and not-null,
-     * when writer is based an existing file's structure.
+     * how to process it. It should be undefined for a new writer.
      * @param segSizein256bs should be present for a new writer,
-     * otherwise, be null.
+     * otherwise, be undefined.
      * @param randomBytes
      * @param arrFactory
      */
@@ -59,12 +58,12 @@ class SegWriter extends xsp_info_1.SegInfoHolder {
     }
     initOfNewWriter(segSize) {
         this.segSize = segSize;
-        this.totalContentLen = null;
-        this.totalNumOfSegments = null;
-        this.totalSegsLen = null;
+        this.totalContentLen = undefined;
+        this.totalNumOfSegments = undefined;
+        this.totalSegsLen = undefined;
         this.segChains = [{
-                numOfSegs: null,
-                lastSegSize: null,
+                numOfSegs: undefined,
+                lastSegSize: undefined,
                 nonce: this.randomBytes(24)
             }];
     }
@@ -88,12 +87,12 @@ class SegWriter extends xsp_info_1.SegInfoHolder {
     }
     destroy() {
         this.arrFactory.wipe(this.key);
-        this.key = null;
+        this.key = undefined;
         for (var i = 0; i < this.segChains.length; i += 1) {
             this.arrFactory.wipe(this.segChains[i].nonce);
         }
-        this.segChains = null;
-        this.arrFactory = null;
+        this.segChains = undefined;
+        this.arrFactory = undefined;
     }
     reset() {
         this.initOfNewWriter(this.segSize);

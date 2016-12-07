@@ -1,6 +1,6 @@
 import { arrays } from 'ecma-nacl';
-import { LocationInSegment, SegInfoHolder } from './xsp-info';
-export interface SegmentsReader {
+import { LocationInSegment, SegInfoHolder, SegsInfo } from './xsp-info';
+export interface SegmentsReader extends SegsInfo {
     /**
      * @param pos is byte's position index in file content.
      * @return corresponding location in segment with segment's info.
@@ -25,11 +25,6 @@ export interface SegmentsReader {
      * This wipes file key and releases used resources.
      */
     destroy(): void;
-    isEndlessFile(): boolean;
-    contentLength(): number;
-    segmentsLength(): number;
-    segmentSize(segInd: number): number;
-    numberOfSegments(): number;
 }
 export declare class SegReader extends SegInfoHolder implements SegmentsReader {
     /**

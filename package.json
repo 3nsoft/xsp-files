@@ -1,6 +1,6 @@
 {
   "name": "xsp-files",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "description": "XSP file format for objects encrypted with NaCl (XSalsa+Poly).",
   "main": "./dist/lib/index.js",
   "typings": "./dist/lib/index.d.ts",
@@ -20,7 +20,8 @@
   "devDependencies": {
     "gulp": "github:gulpjs/gulp#4.0",
     "gulp-shell": "^0.5.2",
-    "gulp-typescript": "^2.13.6",
+    "gulp-typescript": "^3.0.2",
+    "typescript": "^2.0.3",
     "jasmine": "^2.4.1"
 },
   "keywords": [

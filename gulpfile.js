@@ -8,7 +8,7 @@ const TEST_CODE_FOLDER = path.resolve(DIST_FOLDER, 'tests');
 
 function compile(defitions) {
 	var tsProject = ts.createProject('tsconfig.json');
-	var tsResult = tsProject.src().pipe(ts(tsProject));
+	var tsResult = tsProject.src().pipe(tsProject());
 	return tsResult[defitions ? 'dts' : 'js'].pipe(gulp.dest(DIST_FOLDER));
 }
 

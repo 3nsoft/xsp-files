@@ -4,10 +4,10 @@
  * file, you can obtain one at http://mozilla.org/MPL/2.0/. */
 
 import { arrays, secret_box as sbox } from 'ecma-nacl';
-import { LocationInSegment, SegInfoHolder } from './xsp-info';
+import { LocationInSegment, SegInfoHolder, SegsInfo } from './xsp-info';
 import { bind } from '../binding';
 
-export interface SegmentsReader {
+export interface SegmentsReader extends SegsInfo {
 	
 	/**
 	 * @param pos is byte's position index in file content.
@@ -32,16 +32,6 @@ export interface SegmentsReader {
 	 * This wipes file key and releases used resources.
 	 */
 	destroy(): void;
-	
-	isEndlessFile(): boolean;
-	
-	contentLength(): number;
-	
-	segmentsLength(): number;
-	
-	segmentSize(segInd: number): number;
-	
-	numberOfSegments(): number;
 	
 }
 
@@ -95,12 +85,12 @@ export class SegReader extends SegInfoHolder implements SegmentsReader {
 	
 	destroy(): void {
 		this.arrFactory.wipe(this.key);
-		this.key = null;
+		this.key = (undefined as any);
 		for (var i=0; i<this.segChains.length; i+=1) {
 			this.arrFactory.wipe(this.segChains[i].nonce);
 		}
-		this.segChains = null;
-		this.arrFactory = null;
+		this.segChains = (undefined as any);
+		this.arrFactory = (undefined as any);
 	}
 	
 	wrap(): SegmentsReader {

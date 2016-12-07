@@ -58,6 +58,14 @@ export declare function makeNewFileKeyHolder(mkeyEncr: sbox.Encryptor, randomByt
  */
 export declare function makeFileKeyHolder(mkeyDecr: sbox.Decryptor, header: Uint8Array, arrFactory?: arrays.Factory): FileKeyHolder;
 /**
+ * @param mkeyDecr master key decryptor, which is used to open file key.
+ * @param header is an array with file's header. Array can be smaller than whole
+ * header, but it must contain initial file key pack.
+ * @param arrFactory (optional) array factory
+ * @return file key holder with a key, extracted from a given header.
+ */
+export declare function makeReadOnlyFileKeyHolder(mkeyDecr: sbox.Decryptor, header: Uint8Array, arrFactory?: arrays.Factory): FileKeyHolder;
+/**
  * @param fkey is a file key.
  * @param header is an array with file's header. Array can be smaller than whole
  * header, but it must contain initial file key pack.
@@ -65,3 +73,9 @@ export declare function makeFileKeyHolder(mkeyDecr: sbox.Decryptor, header: Uint
  * @return file key holder with a given key.
  */
 export declare function makeHolderFor(fkey: Uint8Array, header: Uint8Array, arrFactory?: arrays.Factory): FileKeyHolder;
+/**
+ * @param fkey is a file key.
+ * @param arrFactory (optional) array factory
+ * @return file key holder with a given key.
+ */
+export declare function makeReadOnlyHolderFor(fkey: Uint8Array, arrFactory?: arrays.Factory): FileKeyHolder;
