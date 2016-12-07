@@ -59,7 +59,7 @@ export interface FileKeyHolder {
 	
 }
 
-export const KEY_PACK_LENGTH = 72;
+export const KEY_PACK_LENGTH: number = 72;
 
 class KeyHolder implements FileKeyHolder {
 	
