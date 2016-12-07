@@ -1,6 +1,6 @@
 {
   "name": "xsp-files",
-  "version": "0.9.0",
+  "version": "0.9.1",
   "description": "XSP file format for objects encrypted with NaCl (XSalsa+Poly).",
   "main": "./dist/lib/index.js",
   "typings": "./dist/lib/index.d.ts",

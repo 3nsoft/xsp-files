@@ -12,7 +12,7 @@ export { generateXSPFileStart, getXSPHeaderOffset,
 	from './file-regalia';
 
 export { FileKeyHolder, makeFileKeyHolder, makeNewFileKeyHolder, makeHolderFor,
-	KEY_PACK_LENGTH }
+	makeReadOnlyFileKeyHolder, makeReadOnlyHolderFor, KEY_PACK_LENGTH }
 	from './key-holder';
 
 Object.freeze(exports);
