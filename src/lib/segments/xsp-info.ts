@@ -50,7 +50,7 @@ export interface ChainedSegsInfo {
 /**
  * @param x
  * @param i
- * @return unsigned 16-bit integer (2 bytes), stored littleendian way in x,
+ * @return unsigned 16-bit integer (2 bytes), stored big-endian way in x,
  * starting at index i.
  */
 function loadUintFrom2Bytes(x: Uint8Array, i: number): number {
@@ -60,7 +60,7 @@ function loadUintFrom2Bytes(x: Uint8Array, i: number): number {
 /**
  * @param x
  * @param i
- * @param u is an unsigned 16-bit integer (2 bytes) to be stored littleendian
+ * @param u is an unsigned 16-bit integer (2 bytes) to be stored big-endian
  * way in x, starting at index i.
  */
 function storeUintIn2Bytes(x: Uint8Array, i: number, u: number): void {
@@ -71,7 +71,7 @@ function storeUintIn2Bytes(x: Uint8Array, i: number, u: number): void {
 /**
  * @param x
  * @param i
- * @return unsigned 32-bit integer (4 bytes), stored littleendian way in x,
+ * @return unsigned 32-bit integer (4 bytes), stored big-endian way in x,
  * starting at index i.
  */
 function loadUintFrom4Bytes(x: Uint8Array, i: number): number {
@@ -81,7 +81,7 @@ function loadUintFrom4Bytes(x: Uint8Array, i: number): number {
 /**
  * @param x
  * @param i
- * @param u is an unsigned 32-bit integer (4 bytes) to be stored littleendian
+ * @param u is an unsigned 32-bit integer (4 bytes) to be stored big-endian
  * way in x, starting at index i.
  */
 function storeUintIn4Bytes(x: Uint8Array, i: number, u: number): void {
@@ -94,7 +94,7 @@ function storeUintIn4Bytes(x: Uint8Array, i: number, u: number): void {
 /**
  * @param x
  * @param i
- * @return unsigned 40-bit integer (5 bytes), stored littleendian way in x,
+ * @return unsigned 40-bit integer (5 bytes), stored big-endian way in x,
  * starting at index i.
  */
 function loadUintFrom5Bytes(x: Uint8Array, i: number): number {
@@ -106,7 +106,7 @@ function loadUintFrom5Bytes(x: Uint8Array, i: number): number {
 /**
  * @param x
  * @param i
- * @param u is an unsigned 40-bit integer (5 bytes) to be stored littleendian
+ * @param u is an unsigned 40-bit integer (5 bytes) to be stored big-endian
  * way in x, starting at index i.
  */
 function storeUintIn5Bytes(x: Uint8Array, i: number, u: number): void {

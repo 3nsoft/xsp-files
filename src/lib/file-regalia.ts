@@ -36,7 +36,7 @@ export var SEGMENTS_FILE_START = asciiToUint8Array('sxsp');
 /**
  * @param x
  * @param i
- * @param u is an unsigned integer (up to 48-bit) to be stored littleendian
+ * @param u is an unsigned integer (up to 48-bit) to be stored big-endian
  * way in x, starting at index i.
  */
 function storeUintIn8Bytes(x: Uint8Array, i: number, u: number): void {
@@ -54,7 +54,7 @@ function storeUintIn8Bytes(x: Uint8Array, i: number, u: number): void {
 /**
  * @param x
  * @param i
- * @return unsigned integer (up to 48 bits), stored littleendian way
+ * @return unsigned integer (up to 48 bits), stored big-endian way
  * in 8 bytes of x, starting at index i.
  */
 function loadUintFrom8Bytes(x: Uint8Array, i: number): number {

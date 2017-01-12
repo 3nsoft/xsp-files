@@ -107,7 +107,7 @@ Header layout:
     |<- WN format ->| |<-                WN format                  ->|
 
  * Total segments length, is just that. It excludes header and other file elements.
- * Total segments length is encoded little-endian way into 5 bytes, allowing up to 2^40-1 bytes, or 1TB - 1byte.
+ * Total segments length is encoded big-endian way into 5 bytes, allowing up to 2^40-1 bytes, or 1TB - 1byte.
  * Content length is equal to total segments length minus 16*n, where n is a total number of segments (16 bytes is poly's code length).
 
 Segment chain bytes look as following:
@@ -125,7 +125,7 @@ There is a sub-module, with XSP-related functionality:
 import * as xsp from 'xsp-files';
 ```
 
-Start work with any file by creating an object that holds file key, and, therefore, can generate correct readera and writers.
+Start work with any file by creating an object that holds file key, and, therefore, can generate correct readers and writers.
 ```javascript
 // for a new file, the following generates new file key, contained in the holder
 let fkeyHolder = xsp.makeNewFileKeyHolder(mkeyEncr, getRandom);
