@@ -1,12 +1,17 @@
 {
 	"compilerOptions": {
-		"target": "es6",
+		"target": "es2017",
+		"lib": [
+			"es2017"
+		],
 		"module": "commonjs",
 		"declaration": true,
 		"rootDir": "src",
 		"outDir": "dist",
-		"strictNullChecks": true
+		"strictNullChecks": true,
+		"pretty": true
 	},
+	"compileOnSave": false,
 	"exclude": [
 		"node_modules",
 		"dist"

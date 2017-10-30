@@ -21,10 +21,14 @@ Once you get package, or this repo, do in the folder
 
 which will install dev-dependencies.
 
-Building is done with [gulp](http://gulpjs.com/), version 4, exposed via npm script.
+Building and testing is done via npm script.
 Do in the folder
 
-    npm run gulp help
+    npm run test
+
+or
+
+    npm run build
 
 and have fun with it.
 
@@ -42,37 +46,25 @@ Therefore, we need a file format, which satisfies the following requirements:
  * it should be possible to detect segment reshuffling;
  * there should be cryptographic proof of a complete file size, for files with
 known size;
- * file should be encrypted by its own key, encrypted with some external (master) key;
  * there should be a stream-like setting, where segments can be encrypted and read without knowledge of a final length;
  * when complete length of a stream is finally known, switching to known-length setting should be cheap.
 
 We call this format XSP, to stand for XSalsa+Poly, to indicate that file layout
 is specifically tailored for storing NaCl's secret box's ciphers.
 XSP file has segments, which are NaCl's packs of Poly and XSalsa cipher, and a header.
-Header is stored at the end of the file, when segments and header are stored in a single file object.
-Sometimes, XSP segments and a header can be stored in separate files.
-
-Complete XSP file looks as following (starting with UTF-8 'xsp'):
-
-    +-----+ +---------------+ +----------+ +--------+
-    | xsp | | header offset | | segments | | header |
-    +-----+ +---------------+ +----------+ +--------+
-
-When file parts are stored separately, header file starts with UTF-8 'hxsp', and segments' file starts with UTF-8 'sxsp'.
 
 Header can be of two types, distinguished by header's size.
 
 ### Endless file
 
-(72+65)-byte header is used for a file with unknown length (endless file), and looks as follows:
+65-byte header is used for a file with unknown length (endless file), and looks as follows:
 
-    |<-  72 bytes ->| |<-          65 bytes          ->|
-    +---------------+ +--------------------------------+
-    |   file key    | | seg size | first segment nonce |
-    +---------------+ +--------------------------------+
-    |<- WN format ->| |<-          WN format         ->|
+    |<-          65 bytes          ->|
+    +--------------------------------+
+    | seg size | first segment nonce |
+    +--------------------------------+
+    |<-          WN format         ->|
 
- * WN pack of a file key is encrypted with master key. Everything else is encrypted with the file key.
  * Seg size is a single byte. Its value, times 256, gives segment's length. This sets a shortest segment to be 256 bytes, and sets a longest one to be 65280 bytes.
  * All segments have given size except for the last segment, which may be shorter.
  * Nonces for segments related to the initial nonce through delta, equal to segment's index, which starts from 0 for the first segment.
@@ -96,15 +88,15 @@ Endless file has only one segment chain, and both length of the last segment, an
 
 ### Finite file
 
-(72+46+n*30)-byte header is used for a file with known length (finite file).
+(46+n*30)-byte header is used for a file with known length (finite file).
 n is a number of segment chains in the file.
 Header layout:
 
-    |<-  72 bytes ->| |<-              46+n*30 bytes                ->|
-    +---------------+ +-----------------------------------------------+
-    |   file key    | | total segs length | | seg size | | seg chains |
-    +---------------+ +-----------------------------------------------+
-    |<- WN format ->| |<-                WN format                  ->|
+    |<-              46+n*30 bytes                ->|
+    +-----------------------------------------------+
+    | total segs length | | seg size | | seg chains |
+    +-----------------------------------------------+
+    |<-                WN format                  ->|
 
  * Total segments length, is just that. It excludes header and other file elements.
  * Total segments length is encoded big-endian way into 5 bytes, allowing up to 2^40-1 bytes, or 1TB - 1byte.
@@ -117,58 +109,78 @@ Segment chain bytes look as following:
     | number of segs | | last seg size | | first segment nonce |
     +----------------+ +---------------+ +---------------------+
 
+### Object versions
+
+Every object may go through many versions, and it would be nice have both object id and a version imprinted into package.
+Imagine that a client wants to get a particular object and version from a server.
+If server tries to give an incorrect version, it should be noticeable immediately.
+XSP employs the following approach to this.
+
+Header is a with-nonce package.
+Nonce is some zeroth (initial) nonce for an object, advanced by version number.
+Zeroth nonce can be used as object's id.
+If you expect a particular id+version combination, you expect to use a particular nonce to open header.
+
+There may be a scenario, in which two clients try to write same new version of an object.
+In this concurrent case, they may send headers that use same nonce.
+This opens a possibility for crypt-analysis of a header.
+But since header only has info about segments structure and segment nonces, such crypt-analysis won't jeopardize the content.
+When creating a new version, both clients will generate new random nonces for use in segments chains that constitute either whole, or a diff of a new version, ensuring that there is no segment nonce reuse.
+
 
 ### API for packing/opening XSP segments 
 
-There is a sub-module, with XSP-related functionality:
+Let's import XSP-related functionality:
 ```javascript
 import * as xsp from 'xsp-files';
 ```
 
-Start work with any file by creating an object that holds file key, and, therefore, can generate correct readers and writers.
-```javascript
-// for a new file, the following generates new file key, contained in the holder
-let fkeyHolder = xsp.makeNewFileKeyHolder(mkeyEncr, getRandom);
+There are two ways to make new version of an object.
+First way is to encrypt new version of content from start to finish.
+Second way is to encrypt only bytes for a new version, splicing them into untouched segments.
+We call later approach as splicing writing, to distinguish it from the former, non-splicing writer.
 
-// existing file has its key packed in its header, which should be used
-let fkeyHolder = xsp.makeFileKeyHolder(mkeyDecr, header);
-```
-
-Packing segments and header:  
+Packing segments and header with a non-splicing writer:
 ```javascript
-// new file writer needs segment size and a function to get random bytes
-let writer = fkeyHolder.newSegWriter(segSizein256bs, getRandom);
+// non-slpicing writer for new file, or new, non-spliced (non-diff-ed) version
+let writer = xsp.makeSegmentsWriter(
+    key,    // this is object/file key
+    zerothHeaderNonce,   // this is a zeroth nonce, used as id
+    version,    // version that will be packed by the writer
+    segSizein256bs, // full segment size, 16 gives 4*4*256B, or 4KB
+    randomBytes,    // random numbers, used for segment nonces
+    cryptor);   // is an async cryptor, used to encrypt segments and header
 
 // header is produced by the following call
-let header = writer.packHeader();
+let header = await writer.packHeader();
 
 // segments are packed with
-let sInfo = writer.packSeg(content, segInd);
-// where sInfo.dataLen is a number of content bytes packed,
-// and sInfo.seg is an array with segment bytes.
+let { seg, dataLen } = await writer.packSeg(content, segInd);
+// where dataLen is a number of content bytes packed,
+// and seg is an array with segment bytes.
 
 // initial endless file can be set to be finite, this changes header information
 writer.setContentLength(contentLen);
-
-// writer of existing file should read existing header
-let writer = xsp.segments.makeWriter(header, getRandom);
 
 // writer should be destroyed, when no longer needed
 writer.destroy();
 ```
 
-Currently, at version 2.2.0, efficient splicing functionality is not implemented, but it shall exist, as file format allows for it.
-We also plan to add some fool-proof restrictions into implementation to disallow packing the same segment twice.
-For now, users are advised to be careful, and to pack each segment only once.
+Currently, at version 1.0.5, efficient splicing functionality is not 100% implemented, but it shall exist, as file format is designed for it.
 
 Reader is used for reading:
 ```javascript
-let reader = xsp.segments.makeReader(header, masterKeyDecr);
+let reader = await xsp.makeSegmentsReader(
+    key,    // this is object/file key
+    zerothHeaderNonce,   // this is a zeroth nonce, used as id
+    version,    // version that is expected to be read by this reader
+    fileHeader, // object header, checked for version in this call
+    cryptor);   // is an async cryptor, used to decrypt segments and header
 
-let dInfo = reader.openSeg(seg, segInd);
-// where dInfo.segLen is a number of segment files read,
-// where dInfo.last is true for the last segment of this file,
-// and dInfo.data is an array with data, read from the segment.
+let { data, segLen, last } = await reader.openSeg(seg, segInd);
+// where segLen is a number of segment files read,
+// where last is true for the last segment of this file,
+// and data is an array with data, read from the segment.
 
 // reader should be destroyed, when no longer needed
 reader.destroy();

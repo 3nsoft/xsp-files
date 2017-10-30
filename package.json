@@ -1,11 +1,12 @@
 {
   "name": "xsp-files",
-  "version": "0.9.4",
+  "version": "1.0.5",
   "description": "XSP file format for objects encrypted with NaCl (XSalsa+Poly).",
   "main": "./dist/lib/index.js",
-  "typings": "./dist/lib/index.d.ts",
+  "types": "./dist/lib/index.d.ts",
   "scripts": {
-    "gulp": "./node_modules/.bin/gulp"
+    "test": "tsc && node dist/tests/jasmine.js",
+    "build": "tsc"
   },
   "repository": {
     "type": "git",
@@ -14,22 +15,19 @@
   "engines": {
     "node": ">=6.0.0"
   },
-  "dependencies": {
-    "ecma-nacl": "^2.4.0"
-  },
   "devDependencies": {
-    "gulp": "github:gulpjs/gulp#4.0",
-    "gulp-shell": "^0.5.2",
-    "gulp-typescript": "^3.0.2",
-    "typescript": "^2.0.3",
-    "jasmine": "^2.4.1"
-},
+    "@types/jasmine": "2.5.46",
+    "@types/node": "8.0.27",
+    "ecma-nacl": "^2.4.0",
+    "jasmine": "^2.4.1",
+    "typescript": "^2.5.2"
+  },
   "keywords": [
     "encryption",
     "high-level",
     "crypto",
     "nacl",
-	  "files",
+    "files",
     "file format"
   ],
   "author": {

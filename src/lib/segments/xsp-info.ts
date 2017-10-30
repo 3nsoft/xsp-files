@@ -1,4 +1,4 @@
-/* Copyright(c) 2015 - 2016 3NSoft Inc.
+/* Copyright(c) 2015 - 2017 3NSoft Inc.
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, you can obtain one at http://mozilla.org/MPL/2.0/. */
@@ -10,7 +10,7 @@
  * if such functionality is needed externally.
  */
 
-import { arrays, secret_box as sbox, nonce as nonceMod } from 'ecma-nacl';
+import { calculateNonce } from '../crypt-utils';
 
 export interface LocationInSegment {
 	
@@ -98,7 +98,7 @@ function storeUintIn4Bytes(x: Uint8Array, i: number, u: number): void {
  * starting at index i.
  */
 function loadUintFrom5Bytes(x: Uint8Array, i: number): number {
-	var int = (x[i+1] << 24) | (x[i+2] << 16) | (x[i+3] << 8) | x[i+4];
+	let int = (x[i+1] << 24) | (x[i+2] << 16) | (x[i+3] << 8) | x[i+4];
 	int += 0x100000000 * x[i];
 	return int;
 }
@@ -120,12 +120,12 @@ function storeUintIn5Bytes(x: Uint8Array, i: number, u: number): void {
 export interface SegsInfo {
 	
 	/**
-	 * @return true, if this file is endless, and false, otherwise.
+	 * This returns true, if this file is endless, and false, otherwise.
 	 */
 	isEndlessFile(): boolean;
 	
 	/**
-	 * @return number of content bytes, incrypted in this file. If file is
+	 * This returns number of content bytes, incrypted in this file. If file is
 	 * endless, undefined is returned.
 	 */
 	contentLength(): number|undefined;
@@ -174,15 +174,11 @@ export abstract class SegInfoHolder implements SegsInfo {
 	
 	/**
 	 * Use this methods in inheriting classes.
-	 * @param header is a 65 bytes of a with-nonce pack, containing
+	 * @param header is a decrypted header array, containing
 	 * 1) 1 byte, indicating segment size in 256byte chuncks, and
 	 * 2) 24 bytes of the first segment's nonce.
-	 * @param key is this file's key
-	 * @param arrFactory
 	 */
-	protected initForEndlessFile(header: Uint8Array, key: Uint8Array,
-			arrFactory: arrays.Factory): void {
-		header = sbox.formatWN.open(header, key, arrFactory);
+	protected initForEndlessFile(header: Uint8Array): void {
 		this.totalSegsLen = undefined;
 		this.totalContentLen = undefined;
 		this.totalNumOfSegments = undefined;
@@ -192,24 +188,20 @@ export abstract class SegInfoHolder implements SegsInfo {
 			lastSegSize: (undefined as any),
 			nonce: new Uint8Array(header.subarray(1, 25))
 		} ];
-		arrFactory.wipe(header);
+		header.fill(0);
 	}
 	
 	/**
 	 * Use this methods in inheriting classes.
-	 * @param header is 46+n*30 bytes with-nonce pack, containing
+	 * @param header is a decrypted header array, containing
 	 * 1) 5 bytes with total segments' length,
 	 * 2) 1 byte, indicating segment size in 256byte chuncks
 	 * 3) n 30-bytes chunks for each segments chain (n===0 for an empty file):
 	 * 3.1) 4 bytes with number of segments in this chain,
 	 * 3.2) 2 bytes with this chain's last segments size,
 	 * 3.3) 24 bytes with the first nonce in this chain.
-	 * @param key is this file's key
-	 * @param arrFactory
 	 */
-	protected initForFiniteFile(header: Uint8Array, key: Uint8Array,
-			arrFactory: arrays.Factory): void {
-		header = sbox.formatWN.open(header, key, arrFactory);
+	protected initForFiniteFile(header: Uint8Array): void {
 		this.totalSegsLen = loadUintFrom5Bytes(header, 0);
 		this.segSize = (header[5] << 8);
 		if (this.segSize === 0) { throw new Error(
@@ -225,12 +217,12 @@ export abstract class SegInfoHolder implements SegsInfo {
 		
 		// non-empty file
 		this.segChains = new Array<ChainedSegsInfo>((header.length-6) / 30);
-		var segChain: ChainedSegsInfo;
+		let segChain: ChainedSegsInfo;
 		this.totalContentLen = 0;
 		this.totalNumOfSegments = 0;
-		var isHeaderOK = 1;		// 1 for OK, and 0 for not-OK
-		var offset = 6;
-		for (var i=0; i < this.segChains.length; i+=1) {
+		let isHeaderOK = 1;		// 1 for OK, and 0 for not-OK
+		let offset = 6;
+		for (let i=0; i < this.segChains.length; i+=1) {
 			offset += i*30;
 			segChain = {
 				numOfSegs: loadUintFrom4Bytes(header, offset),
@@ -248,7 +240,7 @@ export abstract class SegInfoHolder implements SegsInfo {
 				((segChain.lastSegSize < 17) ? 0 : 1) *
 				((segChain.lastSegSize > this.segSize) ? 0 : 1);
 		}
-		arrFactory.wipe(header);
+		header.fill(0);
 		// check consistency of totals
 		isHeaderOK *= ((this.totalSegsLen ===
 				((this.totalContentLen + 16*this.totalNumOfSegments))) ? 1 : 0);
@@ -274,17 +266,17 @@ export abstract class SegInfoHolder implements SegsInfo {
 			this.totalSegsLen = 0;
 			this.segChains = [];
 		} else {
-			var numOfSegs =  Math.floor(totalContentLen / (this.segSize - 16));
+			let numOfSegs =  Math.floor(totalContentLen / (this.segSize - 16));
 			if (numOfSegs*(this.segSize-16) != totalContentLen) {
 				numOfSegs += 1;
 			}
-			var totalSegsLen = totalContentLen + 16*numOfSegs;
+			const totalSegsLen = totalContentLen + 16*numOfSegs;
 			if (totalSegsLen > 0xffffffffff) {	throw new Error(
 					"Content length is out of bounds."); }
 			this.totalContentLen = totalContentLen;
 			this.totalNumOfSegments = numOfSegs;
 			this.totalSegsLen = totalSegsLen;
-			var segChain = this.segChains[0];
+			const segChain = this.segChains[0];
 			segChain.numOfSegs = this.totalNumOfSegments;
 			segChain.lastSegSize = this.totalSegsLen -
 				(this.totalNumOfSegments - 1)*this.segSize;
@@ -297,8 +289,8 @@ export abstract class SegInfoHolder implements SegsInfo {
 	 */
 	locationInSegments(pos: number): LocationInSegment {
 		if (pos < 0) { throw new Error("Given position is out of bounds."); }
-		var contentSegSize = this.segSize - 16;
-		var segInd: number;
+		const contentSegSize = this.segSize - 16;
+		let segInd: number;
 		if (this.isEndlessFile()) {
 			segInd = Math.floor(pos / contentSegSize);
 			return {
@@ -310,14 +302,14 @@ export abstract class SegInfoHolder implements SegsInfo {
 				pos: (pos - segInd * contentSegSize)
 			};
 		}
-		if (pos >= this.totalContentLen) { throw new Error(
+		if (pos >= this.totalContentLen!) { throw new Error(
 				"Given position is out of bounds."); }
 		segInd = 0;
-		var segStart = 0;
-		var contentOffset = 0;
-		var segChain: ChainedSegsInfo;
-		var chainLen: number;
-		for (var i=0; i < this.segChains.length; i+=1) {
+		let segStart = 0;
+		let contentOffset = 0;
+		let segChain: ChainedSegsInfo;
+		let chainLen: number;
+		for (let i=0; i < this.segChains.length; i+=1) {
 			segChain = this.segChains[i];
 			chainLen = segChain.lastSegSize +
 					(segChain.numOfSegs - 1)*this.segSize;
@@ -340,7 +332,7 @@ export abstract class SegInfoHolder implements SegsInfo {
 				};
 			}
 			contentOffset -= (segChain.numOfSegs - 1)*(this.segSize-16);
-			var dSegInd = Math.floor((pos - contentOffset) / contentSegSize);
+			const dSegInd = Math.floor((pos - contentOffset) / contentSegSize);
 			contentOffset += dSegInd*(this.segSize-16);
 			return {
 				pos: (pos - contentOffset),
@@ -355,7 +347,7 @@ export abstract class SegInfoHolder implements SegsInfo {
 	}
 	
 	protected packInfoToBytes(): Uint8Array {
-		var head: Uint8Array;
+		let head: Uint8Array;
 		if (this.isEndlessFile()) {
 			head = new Uint8Array(24 + 1);
 			// 1) pack segment common size in 256 chunks
@@ -369,9 +361,9 @@ export abstract class SegInfoHolder implements SegsInfo {
 			// 2) pack segment common size in 256 chunks
 			head[5] = this.segSize >>> 8;
 			// 3) pack info about chained segments
-			var segChain: ChainedSegsInfo;
-			var offset = 6;
-			for (var i=0; i < this.segChains.length; i+=1) {
+			let segChain: ChainedSegsInfo;
+			let offset = 6;
+			for (let i=0; i < this.segChains.length; i+=1) {
 				segChain = this.segChains[i];
 				// 3.1) 4 bytes with number of segments in this chain
 				storeUintIn4Bytes(head, offset, segChain.numOfSegs);
@@ -387,29 +379,27 @@ export abstract class SegInfoHolder implements SegsInfo {
 	}
 	
 	/**
+	 * This returns segment's nonce. Byte array is not shared.
 	 * @param segInd
-	 * @return segment's nonce, recyclable after its use.
 	 */
-	protected getSegmentNonce(segInd: number, arrFactory: arrays.Factory): Uint8Array {
+	protected getSegmentNonce(segInd: number): Uint8Array {
 		if (this.isEndlessFile()) {
 			if (segInd > 0xffffffff) { throw new Error(
 					"Given segment index is out of bounds."); }
-			return nonceMod.calculateNonce(
-					this.segChains[0].nonce, segInd, arrFactory);
+			return calculateNonce(this.segChains[0].nonce, segInd);
 		}
-		if ((segInd >= this.totalNumOfSegments) ||
+		if ((segInd >= this.totalNumOfSegments!) ||
 				(segInd < 0)) { throw new Error(
 				"Given segment index is out of bounds."); }
-		var segChain: ChainedSegsInfo;
-		var lastSegInd = 0;
-		for (var i=0; i < this.segChains.length; i+=1) {
+		let segChain: ChainedSegsInfo;
+		let lastSegInd = 0;
+		for (let i=0; i < this.segChains.length; i+=1) {
 			segChain = this.segChains[i];
 			if ((lastSegInd + segChain.numOfSegs) <= segInd) {
 				lastSegInd += segChain.numOfSegs;
 				continue;
 			} else {
-				return nonceMod.calculateNonce(
-						segChain.nonce, (segInd - lastSegInd), arrFactory);
+				return calculateNonce(segChain.nonce, (segInd - lastSegInd));
 			}
 		}
 		throw new Error("If we get here, there is an error in the loop above.");
@@ -426,12 +416,12 @@ export abstract class SegInfoHolder implements SegsInfo {
 					"Given segment index is out of bounds."); }
 			return this.segSize;
 		}
-		if ((segInd >= this.totalNumOfSegments) ||
+		if ((segInd >= this.totalNumOfSegments!) ||
 				(segInd < 0)) { throw new Error(
 				"Given segment index is out of bounds."); }
-		var segChain: ChainedSegsInfo;
-		var lastSegInd = 0;
-		for (var i=0; i < this.segChains.length; i+=1) {
+		let segChain: ChainedSegsInfo;
+		let lastSegInd = 0;
+		for (let i=0; i < this.segChains.length; i+=1) {
 			segChain = this.segChains[i];
 			if ((lastSegInd + segChain.numOfSegs) <= segInd) {
 				lastSegInd += segChain.numOfSegs;
