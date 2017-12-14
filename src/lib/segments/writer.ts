@@ -31,7 +31,7 @@ export interface SegmentsWriter extends SegsInfo {
 	 * This allows for 100% fresh write of segments with the same file key, and
 	 * same default segment size.
 	 */
-	reset(): void;
+	reset(): Promise<void>;
 	
 	packHeader(): Promise<Uint8Array>;
 	
@@ -45,9 +45,10 @@ export interface SegmentsWriter extends SegsInfo {
 
 }
 
-export type RNG = (n: number) => Uint8Array;
+export type RNG = (n: number) => Promise<Uint8Array>;
 
 /**
+ * This returns a promise, resolvable to segments writer.
  * @param key
  * @param zerothHeaderNonce this nonce array, advanced according to given
  * version, is used as header's nonce for this version
@@ -56,12 +57,12 @@ export type RNG = (n: number) => Uint8Array;
  * @param randomBytes
  * @param cryptor
  */
-export function makeSegmentsWriter(key: Uint8Array,
+export async function makeSegmentsWriter(key: Uint8Array,
 		zerothHeaderNonce: Uint8Array, version: number, segSizein256bs: number,
-		randomBytes: RNG, cryptor: AsyncSBoxCryptor): SegmentsWriter {
+		randomBytes: RNG, cryptor: AsyncSBoxCryptor): Promise<SegmentsWriter> {
 	const segWriter = new SegWriter(
 		key, zerothHeaderNonce, version, randomBytes, cryptor);
-	segWriter.initClean(segSizein256bs);
+	await segWriter.initClean(segSizein256bs);
 	return segWriter.wrap();
 }
 
@@ -125,11 +126,11 @@ class SegWriter extends SegInfoHolder implements SegmentsWriter {
 			new Uint8Array(zerothHeaderNonce));
 	}
 
-	initClean(segSizein256bs: number): void {
+	async initClean(segSizein256bs: number): Promise<void> {
 		if ((segSizein256bs < 1) || (segSizein256bs > 255)) {
 			throw new Error("Given segment size is illegal.");
 		}
-		this.initOfNewWriter(segSizein256bs << 8);
+		await this.initOfNewWriter(segSizein256bs << 8);
 		this.headerModified = true;
 		Object.seal(this);
 	}
@@ -149,7 +150,7 @@ class SegWriter extends SegInfoHolder implements SegmentsWriter {
 		Object.seal(this);
 	}
 
-	private initOfNewWriter(segSize: number): void {
+	private async initOfNewWriter(segSize: number): Promise<void> {
 		this.segSize = segSize;
 		this.totalContentLen = undefined;
 		this.totalNumOfSegments = undefined;
@@ -157,7 +158,7 @@ class SegWriter extends SegInfoHolder implements SegmentsWriter {
 		this.segChains = [ {
 			numOfSegs: (undefined as any),
 			lastSegSize: (undefined as any),
-			nonce: this.randomBytes(24)
+			nonce: await this.randomBytes(24)
 		} ];
 	}
 	
@@ -188,8 +189,8 @@ class SegWriter extends SegInfoHolder implements SegmentsWriter {
 		this.cryptor = (undefined as any);
 	}
 	
-	reset(): void {
-		this.initOfNewWriter(this.segSize);
+	async reset(): Promise<void> {
+		await this.initOfNewWriter(this.segSize);
 		this.headerModified = true;
 	}
 	

@@ -5,8 +5,16 @@
 
 import { arrays, secret_box as sbox } from 'ecma-nacl';
 import { AsyncSBoxCryptor } from '../lib/crypt-utils';
+import { randomBytes } from 'crypto';
 
-export { randomBytes as getRandom } from 'crypto';
+export { randomBytes as getRandomSync } from 'crypto';
+
+export function getRandom(numOfBytes: number): Promise<Uint8Array> {
+	return new Promise((res, rej) => randomBytes(numOfBytes, (err, buf) => {
+		if (err) { rej(err); }
+		else { res(buf); }
+	}))
+}
 
 export function compare(v: Uint8Array, expectation: Array<number>, m? :string);
 export function compare(v: Uint8Array, expectation: Uint8Array, m? :string);

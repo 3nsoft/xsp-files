@@ -23,13 +23,13 @@ const cryptor = mockCryptor();
  */
 async function testSingleChainHeader(dataLen: number, segSizein256bs: number) {
 
-	const data = getRandom(dataLen);
-	const key = getRandom(KEY_LENGTH);
-	const zerothHeaderNonce = getRandom(NONCE_LENGTH);
+	const data = await getRandom(dataLen);
+	const key = await getRandom(KEY_LENGTH);
+	const zerothHeaderNonce = await getRandom(NONCE_LENGTH);
 	const version = 7;
 	
 	// initialize writer
-	const writer = makeSegmentsWriter(
+	const writer = await makeSegmentsWriter(
 		key, zerothHeaderNonce, version, segSizein256bs, getRandom, cryptor);
 	expect(writer.version).toBe(version);
 	expect(writer.isHeaderModified()).toBe(true);
@@ -56,7 +56,7 @@ async function testSingleChainHeader(dataLen: number, segSizein256bs: number) {
 	expect(totalLengthOfByteArrays(fileSegments)).toBe(segmentsLen);
 	
 	// test reseting writer
-	writer.reset();
+	await writer.reset();
 	expect(writer.isHeaderModified()).toBe(true);
 	expect(writer.isEndlessFile()).toBe(true);
 	expect(writer.contentLength()).toBeUndefined();
@@ -104,7 +104,7 @@ async function testSingleChainHeader(dataLen: number, segSizein256bs: number) {
 
 }
 
-export async function packSegments(writer: SegmentsWriter, data: Buffer):
+export async function packSegments(writer: SegmentsWriter, data: Uint8Array):
 		Promise<Uint8Array[]> {
 	const segs: Uint8Array[] = [];
 	let offset = 0;
@@ -140,13 +140,13 @@ export async function readSegsSequentially(reader: SegmentsReader,
  */
 async function testEndlessFile(dataLen: number, segSizein256bs: number) {
 
-	const data = getRandom(dataLen);
-	const key = getRandom(KEY_LENGTH);
-	const zerothHeaderNonce = getRandom(NONCE_LENGTH);
+	const data = await getRandom(dataLen);
+	const key = await getRandom(KEY_LENGTH);
+	const zerothHeaderNonce = await getRandom(NONCE_LENGTH);
 	const version = 3;
 
 	// initialize writer
-	const writer = makeSegmentsWriter(
+	const writer = await makeSegmentsWriter(
 		key, zerothHeaderNonce, version, segSizein256bs, getRandom, cryptor);
 	expect(writer.version).toBe(version);
 	expect(writer.isHeaderModified()).toBe(true);

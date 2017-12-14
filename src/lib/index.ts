@@ -8,7 +8,7 @@ export { SegmentsReader, makeSegmentsReader } from './segments/reader';
 export { SegmentsWriter, makeSegmentsWriter, makeSplicingSegmentsWriter }
 	from './segments/writer';
 export { AsyncSBoxCryptor, KEY_LENGTH, NONCE_LENGTH, POLY_LENGTH,
-	compareVectors, calculateNonce }
+	compareVectors, calculateNonce, advanceNonce }
 	from './crypt-utils';
 
 Object.freeze(exports);

@@ -3,7 +3,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, you can obtain one at http://mozilla.org/MPL/2.0/. */
 
-import { getRandom, mockCryptor, combineByteArrays } from '../test-utils';
+import { getRandom, getRandomSync, mockCryptor, combineByteArrays }
+	from '../test-utils';
 import { packSegments, readSegsSequentially } from '../segments/xsp';
 import { calculateNonce, NONCE_LENGTH, KEY_LENGTH, compareVectors,
 	makeSegmentsWriter, makeSegmentsReader }
@@ -15,13 +16,13 @@ const segSizein256bs = 16;
 
 describe('Header nonce', () => {
 
-	const data = getRandom(345);
-	const key = getRandom(KEY_LENGTH);
-	const zerothHeaderNonce = getRandom(NONCE_LENGTH);
+	const data = getRandomSync(345);
+	const key = getRandomSync(KEY_LENGTH);
+	const zerothHeaderNonce = getRandomSync(NONCE_LENGTH);
 	const version = 7;
 	
 	itAsync('is related to initial zeroth nonce via version', async () => {
-		const writer = makeSegmentsWriter(
+		const writer = await makeSegmentsWriter(
 			key, zerothHeaderNonce, version, segSizein256bs, getRandom, cryptor);
 
 		const segs = combineByteArrays(await packSegments(writer, data));
@@ -40,7 +41,7 @@ describe('Header nonce', () => {
 
 describe('Function calculateNonce', () => {
 
-	const zerothNonce = getRandom(NONCE_LENGTH);
+	const zerothNonce = getRandomSync(NONCE_LENGTH);
 	
 	it('creates nonces, related by version', () => {
 		[ 1, 4, 1000, 0xffffffffff34, -1, -4, -1000, -0xffffffffff34 ]
