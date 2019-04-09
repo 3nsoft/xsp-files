@@ -1,42 +1,71 @@
-/* Copyright(c) 2015 - 2017 3NSoft Inc.
- * This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, you can obtain one at http://mozilla.org/MPL/2.0/. */
+/*
+ Copyright(c) 2015 - 2018 3NSoft Inc.
+ 
+ This program is free software: you can redistribute it and/or modify it under
+ the terms of the GNU General Public License as published by the Free Software
+ Foundation, either version 3 of the License, or (at your option) any later
+ version.
+ 
+ This program is distributed in the hope that it will be useful, but
+ WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ See the GNU General Public License for more details.
+ 
+ You should have received a copy of the GNU General Public License along with
+ this program. If not, see <http://www.gnu.org/licenses/>. */
 
-import { LocationInSegment, SegInfoHolder, SegsInfo } from './xsp-info';
-import { bind } from '../binding';
+import { LocationInSegment, Locations, SegId, SegmentInfo, SegsInfo,
+	readSegsInfoFromHeader, Exception, makeBaseException }
+	from './xsp-info';
 import { AsyncSBoxCryptor, findNonceDelta, nonceDeltaToNumber,
 	KEY_LENGTH, NONCE_LENGTH }
-	from '../crypt-utils';
+	from '../utils/crypt-utils';
 	
-export interface SegmentsReader extends SegsInfo {
-	
+export interface SegmentsReader {
+
+	/**
+	 * Is true, if this file is endless, and false, otherwise.
+	 */
+	readonly isEndlessFile: boolean;
+
+	/**
+	 * Number of content bytes, encrypted in this file. If file is endless,
+	 * undefined is returned.
+	 */
+	readonly contentLength: number|undefined;
+
+	readonly segmentsLength: number|undefined;
+
+	segmentInfo(segId: SegId): SegmentInfo;
+
+	segmentInfos(fstSeg?: SegId): IterableIterator<SegmentInfo>;
+
+	readonly version: number;
+
 	/**
 	 * @param pos is byte's position index in file content.
 	 * @return corresponding location in segment with segment's info.
 	 */
-	locationInSegments(pos: number): LocationInSegment;
-	
+	locateContentOfs(pos: number): LocationInSegment;
+
+	locateSegsOfs(segsOfs: number): LocationInSegment;
+
+	openSeg(segId: SegId, segBytes: Uint8Array): Promise<Uint8Array>;
+
 	/**
-	 * @param seg is an array with encrypted segment's bytes, starting at
-	 * zeroth index. Array may be longer than a segment, but it will an error,
-	 * if it is shorter.
-	 * @param segInd is segment's index in file.
-	 * @return decrypted content bytes of a given segment and a length of
-	 * decrypted segment.
-	 * Data array is a view of buffer, which has 32 zeros preceding
-	 * content bytes.
-	 */
-	openSeg(seg: Uint8Array, segInd: number):
-		Promise<{ data: Uint8Array; segLen: number; last?: boolean; }>;
-	
-	/**
-	 * This wipes file key and releases used resources.
+	 * This wipes file key.
 	 */
 	destroy(): void;
 
-	version: number;
+}
 
+export type ValidationExcFlag = 'versionMismatch' | 'nonceMismatch';
+
+function exception(flag: ValidationExcFlag, msg?: string, cause?: any):
+		Exception {
+	const e = makeBaseException(msg, cause);
+	e[flag] = true;
+	return e;
 }
 
 /**
@@ -56,85 +85,65 @@ export async function makeSegmentsReader(key: Uint8Array,
 	if (zerothHeaderNonce) {
 		const headerNonce = header.subarray(0, NONCE_LENGTH);
 		const delta = findNonceDelta(zerothHeaderNonce, headerNonce);
-		if ((delta === undefined) || (version !== nonceDeltaToNumber(delta))) {
-			throw new Error("Header's version check failed");
-		}
+		if (delta === undefined) { throw exception('nonceMismatch'); }
+		if (version !== nonceDeltaToNumber(delta)) { throw exception(
+			'versionMismatch'); }
 	}
-	const segsReader = new SegReader(key, version, cryptor);
-	await segsReader.init(header);
-	return segsReader.wrap();
+	return SegReader.makeFor(key, version, header, cryptor);
 }
 
-class SegReader extends SegInfoHolder implements SegmentsReader {
+class SegReader {
 	
 	/**
 	 * This is a file key, which should be wipped, after this object
 	 * is no longer needed.
 	 */
-	key: Uint8Array;
+	private key: Uint8Array;
+	private index: Locations;
 
-	constructor(key: Uint8Array,
-			public version: number,
-			private cryptor: AsyncSBoxCryptor) {
-		super();
+	private constructor(key: Uint8Array,
+		private segs: SegsInfo,
+		public version: number,
+		private cryptor: AsyncSBoxCryptor
+	) {
 		if (key.length !== KEY_LENGTH) { throw new Error(
-				"Given key has wrong size."); }
+			"Given key has wrong size."); }
 		this.key = new Uint8Array(key);
-	}
-
-	async init(header: Uint8Array): Promise<void> {
-		if (header.length === 65) {
-			this.initForEndlessFile(
-				await this.cryptor.formatWN.open(header, this.key));
-		} else {
-			if ((((header.length - 46) % 30) !== 0) || (header.length < 46)) {
-				throw new Error("Given header array has incorrect size."); }
-			this.initForFiniteFile(
-				await this.cryptor.formatWN.open(header, this.key));
-		}
+		this.index = new Locations(this.segs);
 		Object.seal(this);
 	}
-	
-	async openSeg(seg: Uint8Array, segInd: number):
-			Promise<{ data: Uint8Array; segLen: number; last?: boolean; }> {
-		let isLastSeg = ((segInd + 1) === this.totalNumOfSegments);
-		const nonce = this.getSegmentNonce(segInd);
-		const segLen = this.segmentSize(segInd);
-		if (seg.length < segLen) {
-			if (this.isEndlessFile()) {
-				isLastSeg = true;
-			} else {
-				throw new Error("Given byte array is smaller than segment's size.");
-			}
-		} else if (seg.length > segLen) {
-			seg = seg.subarray(0, segLen);
-		}
-		const bytes = await this.cryptor.open(seg, nonce, this.key);
-		nonce.fill(0);
-		return { data: bytes, segLen: segLen, last: isLastSeg };
+
+	static async makeFor(key: Uint8Array, version: number,
+		header: Uint8Array, cryptor: AsyncSBoxCryptor): Promise<SegmentsReader> {
+		const headerContent = await cryptor.formatWN.open(header, key);
+		const segs = readSegsInfoFromHeader(headerContent);
+		return (new SegReader(key, segs, version, cryptor)).wrap();
+	}
+
+	private async openSeg(segId: SegId, segBytes: Uint8Array):
+			Promise<Uint8Array> {
+		const nonce = this.index.segmentNonce(segId);
+		const data = await this.cryptor.open(segBytes, nonce, this.key);
+		return data;
 	}
 	
-	destroy(): void {
+	private destroy(): void {
 		this.key.fill(0);
 		this.key = (undefined as any);
-		for (let i=0; i<this.segChains.length; i+=1) {
-			this.segChains[i].nonce.fill(0);
-		}
-		this.segChains = (undefined as any);
-		this.cryptor = (undefined as any);
 	}
 	
-	wrap(): SegmentsReader {
+	private wrap(): SegmentsReader {
 		const wrap: SegmentsReader = {
-			locationInSegments: bind(this, this.locationInSegments),
-			openSeg: bind(this, this.openSeg),
-			destroy: bind(this, this.destroy),
-			isEndlessFile: bind(this, this.isEndlessFile),
-			contentLength: bind(this, this.contentLength),
-			segmentSize: bind(this, this.segmentSize),
-			segmentsLength: bind(this, this.segmentsLength),
-			numberOfSegments: bind(this, this.numberOfSegments),
-			version: this.version
+			locateContentOfs: pos => this.index.locateContentOfs(pos),
+			locateSegsOfs: segsOfs => this.index.locateSegsOfs(segsOfs),
+			openSeg: this.openSeg.bind(this),
+			destroy: this.destroy.bind(this),
+			isEndlessFile: (this.index.totalSegsLen === undefined),
+			contentLength: this.index.totalContentLen,
+			segmentsLength: this.index.totalSegsLen,
+			version: this.version,
+			segmentInfo: s => this.index.segmentInfo(s),
+			segmentInfos: fstSeg => this.index.segmentInfos(fstSeg)
 		};
 		Object.freeze(wrap);
 		return wrap;

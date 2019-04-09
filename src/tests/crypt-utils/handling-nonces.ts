@@ -1,15 +1,26 @@
-/* Copyright(c) 2017 3NSoft Inc.
- * This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, you can obtain one at http://mozilla.org/MPL/2.0/. */
+/*
+ Copyright(c) 2017 - 2018 3NSoft Inc.
+ 
+ This program is free software: you can redistribute it and/or modify it under
+ the terms of the GNU General Public License as published by the Free Software
+ Foundation, either version 3 of the License, or (at your option) any later
+ version.
+ 
+ This program is distributed in the hope that it will be useful, but
+ WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ See the GNU General Public License for more details.
+ 
+ You should have received a copy of the GNU General Public License along with
+ this program. If not, see <http://www.gnu.org/licenses/>. */
 
-import { getRandom, getRandomSync, mockCryptor, combineByteArrays }
-	from '../test-utils';
+import { getRandom, getRandomSync, mockCryptor }
+	from '../../test-lib/test-utils';
 import { packSegments, readSegsSequentially } from '../segments/xsp';
 import { calculateNonce, NONCE_LENGTH, KEY_LENGTH, compareVectors,
 	makeSegmentsWriter, makeSegmentsReader }
 	from '../../lib/index';
-import { itAsync } from '../async-jasmine';
+import { itAsync } from '../../test-lib/async-jasmine';
 
 const cryptor = mockCryptor();
 const segSizein256bs = 16;
@@ -23,9 +34,11 @@ describe('Header nonce', () => {
 	
 	itAsync('is related to initial zeroth nonce via version', async () => {
 		const writer = await makeSegmentsWriter(
-			key, zerothHeaderNonce, version, segSizein256bs, getRandom, cryptor);
+			key, zerothHeaderNonce, version,
+			{ type: 'new', segSize: segSizein256bs },
+			getRandom, cryptor);
 
-		const segs = combineByteArrays(await packSegments(writer, data));
+		const segs = await packSegments(writer, data);
 		const header = await writer.packHeader();
 		
 		const verNonce = header.subarray(0, NONCE_LENGTH);
@@ -34,7 +47,7 @@ describe('Header nonce', () => {
 
 		const reader = await makeSegmentsReader(
 			key, zNonce, version, header, cryptor);
-		const d = combineByteArrays(await readSegsSequentially(reader, segs));
+		const d = await readSegsSequentially(reader, segs);
 		expect(compareVectors(d, data)).toBe(true);
 	});
 });

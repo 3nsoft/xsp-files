@@ -1,11 +1,11 @@
 {
   "name": "xsp-files",
-  "version": "1.0.8",
+  "version": "2.0.0",
   "description": "XSP file format for objects encrypted with NaCl (XSalsa+Poly).",
   "main": "./dist/lib/index.js",
   "types": "./dist/lib/index.d.ts",
   "scripts": {
-    "test": "tsc && node dist/tests/jasmine.js",
+    "test": "tsc && jasmine dist/tests/**/*.js",
     "build": "tsc"
   },
   "repository": {
@@ -16,11 +16,12 @@
     "node": ">=6.0.0"
   },
   "devDependencies": {
-    "@types/jasmine": "2.5.46",
-    "@types/node": "8.0.27",
+    "@types/jasmine": "^2.5.46",
+    "@types/node": "^8.0.27",
     "ecma-nacl": "^2.4.2",
-    "jasmine": "^2.4.1",
-    "typescript": "^2.5.2"
+    "jasmine": "^3.1.0",
+    "rxjs": "^6.3.3",
+    "typescript": "^3.2.2"
   },
   "keywords": [
     "encryption",
@@ -35,6 +36,6 @@
     "url": "https://3nsoft.com",
     "email": "hq@3nsoft.com"
   },
-  "license": "MPL-2.0",
+  "license": "GPL-3.0",
   "readmeFilename": "README.md"
 }

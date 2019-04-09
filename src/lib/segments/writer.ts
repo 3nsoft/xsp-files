@@ -1,49 +1,100 @@
-/* Copyright(c) 2015 - 2017 3NSoft Inc.
- * This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, you can obtain one at http://mozilla.org/MPL/2.0/. */
+/*
+ Copyright(c) 2015 - 2018 3NSoft Inc.
+ 
+ This program is free software: you can redistribute it and/or modify it under
+ the terms of the GNU General Public License as published by the Free Software
+ Foundation, either version 3 of the License, or (at your option) any later
+ version.
+ 
+ This program is distributed in the hope that it will be useful, but
+ WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ See the GNU General Public License for more details.
+ 
+ You should have received a copy of the GNU General Public License along with
+ this program. If not, see <http://www.gnu.org/licenses/>. */
 
-import { LocationInSegment, SegInfoHolder, SegsInfo } from './xsp-info';
-import { bind } from '../binding';
+import { LocationInSegment, SegId, SegmentInfo, SegsInfo,
+	readSegsInfoFromHeader, Exception, makeBaseException }
+	from './xsp-info';
 import { AsyncSBoxCryptor, calculateNonce, KEY_LENGTH, NONCE_LENGTH }
-	from '../crypt-utils';
+	from '../utils/crypt-utils';
+import { ObjSource, Layout } from '../streaming/common';
+import { assert } from '../utils/assert';
+import { PackingInfo } from './packing-info';
 
-export interface SegmentsWriter extends SegsInfo {
-	
+export interface SegmentsWriter {
+
+	/**
+	 * Is true, if this file is endless, and false, otherwise.
+	 */
+	readonly isEndlessFile: boolean;
+
+	/**
+	 * Number of content bytes, encrypted in this file. If file is endless,
+	 * undefined is returned.
+	 */
+	readonly contentLength: number|undefined;
+
+	readonly segmentsLength: number|undefined;
+
+	segmentInfo(segId: SegId): WritableSegmentInfo;
+
+	segmentInfos(fstSeg?: SegId): IterableIterator<WritableSegmentInfo>;
+
+	readonly version: number;
+
+	readonly defaultSegSize: number;
+
 	/**
 	 * This returns location in segment, corresponding to a given position in
 	 * content.
 	 * @param pos is byte's position index in file content.
 	 */
-	locationInSegments(pos: number): LocationInSegment;
+	locateContentOfs(pos: number): LocationInSegment;
+
+	locateSegsOfs(segsOfs: number): LocationInSegment;
 	
-	packSeg(content: Uint8Array, segInd: number):
-		Promise<{ dataLen: number; seg: Uint8Array }>;
-	
+	packSeg(content: Uint8Array, segId: SegId): Promise<Uint8Array>;
+
+	showContentLayout(): Layout;
+
+	showPackedLayout(): Layout;
+
 	/**
-	 * This wipes file key and releases used resources.
+	 * This wipes file key.
 	 */
 	destroy(): void;
-	
-	/**
-	 * This resets writer's internal state, keeping a file key, and removes info
-	 * about segment chains, total length, etc.
-	 * This allows for 100% fresh write of segments with the same file key, and
-	 * same default segment size.
-	 */
-	reset(): Promise<void>;
-	
+
 	packHeader(): Promise<Uint8Array>;
 	
-	setContentLength(totalContentLen: number): void;
+	setContentLength(totalContentLen: number|undefined): Promise<void>;
 	
-	isHeaderModified(): boolean;
-	
-	splice(pos: number, rem: number, ins: number);
+	readonly isHeaderPacked: boolean;
 
-	version: number;
+	readonly areSegmentsPacked: boolean;
+	
+	splice(pos: number, rem: number, ins: number): Promise<void>;
+
+	readonly hasBase: boolean;
+
+	unpackedReencryptChainSegs(): NewSegmentInfo[];
 
 }
+
+export interface BaseSegmentInfo extends SegmentInfo {
+	type: 'base';
+	baseOfs: number;
+	baseContentOfs: number;
+}
+
+export interface NewSegmentInfo extends SegmentInfo {
+	type: 'new';
+	headBytes?: number;
+	needPacking?: boolean;
+}
+
+export type WritableSegmentInfo = NewSegmentInfo | BaseSegmentInfo;
 
 export type RNG = (n: number) => Promise<Uint8Array>;
 
@@ -53,212 +104,219 @@ export type RNG = (n: number) => Promise<Uint8Array>;
  * @param zerothHeaderNonce this nonce array, advanced according to given
  * version, is used as header's nonce for this version
  * @param version
- * @param segSizein256bs is a standard segment size in 256-byte chunks
- * @param randomBytes
+ * @param opt is a setting options objects allowing to create new writer,
+ * writer on top of some base, or a restarted new writer.
+ * @param rng
  * @param cryptor
  */
 export async function makeSegmentsWriter(key: Uint8Array,
-		zerothHeaderNonce: Uint8Array, version: number, segSizein256bs: number,
-		randomBytes: RNG, cryptor: AsyncSBoxCryptor): Promise<SegmentsWriter> {
-	const segWriter = new SegWriter(
-		key, zerothHeaderNonce, version, randomBytes, cryptor);
-	await segWriter.initClean(segSizein256bs);
-	return segWriter.wrap();
+		zerothHeaderNonce: Uint8Array, version: number,
+		opt: SegmentWriterMakeOpt,
+		rng: RNG, cryptor: AsyncSBoxCryptor): Promise<SegmentsWriter> {
+	if (opt.type === 'new') {
+		return await SegWriter.makeFresh(
+			key, zerothHeaderNonce, opt.segSize, version, rng, cryptor);
+	} else if (opt.type === 'restart') {
+		return await SegWriter.makeRestarted(
+			key, zerothHeaderNonce, opt.header, version, rng, cryptor);
+	} else if (opt.type === 'update') {
+		return await SegWriter.makeUpdated(
+			key, zerothHeaderNonce, opt.base, version, rng, cryptor);
+	} else {
+		throw new Error(`Given unknown option type`);
+	}
 }
 
-/**
- * @param key
- * @param zerothHeaderNonce this nonce array, advanced according to given
- * version, is used as header's nonce for this version
- * @param version
- * @param baseHeader a file's header. Array must contain only header's bytes,
- * as its length is used to decide how to process it.
- * @param randomBytes
- * @param cryptor
- */
-export async function makeSplicingSegmentsWriter(key: Uint8Array,
-		zerothHeaderNonce: Uint8Array, version: number, baseHeader: Uint8Array,
-		randomBytes: RNG, cryptor: AsyncSBoxCryptor): Promise<SegmentsWriter> {
-	const segWriter = new SegWriter(
-		key, zerothHeaderNonce, version, randomBytes, cryptor);
-	await segWriter.initSplicing(baseHeader);
-	return segWriter.wrap();
-}
+export type SegmentWriterMakeOpt = { type: 'new'; segSize: number; } |
+	{ type: 'update'; base: ObjSource; } |
+	{ type: 'restart'; header: Uint8Array; };
 
-class SegWriter extends SegInfoHolder implements SegmentsWriter {
+class SegWriter {
 	
 	/**
 	 * This is a file key, which should be wipped, after this object
 	 * is no longer needed.
 	 */
 	private key: Uint8Array;
-	
-	private headerModified: boolean;
+
+	private packing: PackingInfo;
 
 	private headerNonce: Uint8Array;
 	
 	/**
 	 * @param key
-	 * @param zerothHeaderNonce this nonce array, advanced according to given
-	 * version, is used as header's nonce for this version
+	 * @param zerothNonce this nonce array, advanced according to given
+	 * version, is used as header's nonce for this new version
+	 * @param segsOrSegSize
 	 * @param version
 	 * @param randomBytes
 	 * @param cryptor
+	 * @param base
 	 */
-	constructor(key: Uint8Array,
-			zerothHeaderNonce: Uint8Array,
-			public version: number,
-			private randomBytes: RNG,
-			private cryptor: AsyncSBoxCryptor) {
-		super();
-		
+	private constructor(key: Uint8Array, zerothNonce: Uint8Array,
+		segsOrSegSize: SegsInfo|number,
+		public version: number,
+		private randomBytes: RNG,
+		private cryptor: AsyncSBoxCryptor,
+		private base?: ObjSource
+	) {
 		if (key.length !== KEY_LENGTH) { throw new Error(
 				"Given key has wrong size."); }
 		this.key = new Uint8Array(key);
-
+		if (this.base) {
+			if (typeof segsOrSegSize !== 'object') { throw new Error(
+				`Base segments should be given`); }
+			this.packing = PackingInfo.make(
+				segsOrSegSize, this.randomBytes, this.base.version);
+		} else if (typeof segsOrSegSize === 'number') {
+			this.packing = PackingInfo.make(segsOrSegSize, this.randomBytes);
+		} else {
+			this.packing = PackingInfo.restartWithAllNewFrozenLayout(
+				segsOrSegSize);
+		}
 		if (!Number.isInteger(this.version) || (this.version < 0)) {
 			throw new Error(`Given version is not a non-negative integer`); }
-
-		if (zerothHeaderNonce.length !== NONCE_LENGTH) { throw new Error(
+		if (zerothNonce.length !== NONCE_LENGTH) { throw new Error(
 			"Given zeroth header nonce has wrong size."); }
 		this.headerNonce = ((this.version > 0) ?
-			this.headerNonce = calculateNonce(zerothHeaderNonce, this.version) :
-			new Uint8Array(zerothHeaderNonce));
+			calculateNonce(zerothNonce, this.version) :
+			new Uint8Array(zerothNonce));
+		Object.seal(this);
 	}
 
-	async initClean(segSizein256bs: number): Promise<void> {
-		if ((segSizein256bs < 1) || (segSizein256bs > 255)) {
+	static async makeFresh(key: Uint8Array, zerothNonce: Uint8Array,
+			segSizein256bs: number, version: number, randomBytes: RNG,
+			cryptor: AsyncSBoxCryptor): Promise<SegmentsWriter> {
+		if ((segSizein256bs < 1) || (segSizein256bs > 0xffff)) {
 			throw new Error("Given segment size is illegal.");
 		}
-		await this.initOfNewWriter(segSizein256bs << 8);
-		this.headerModified = true;
-		Object.seal(this);
+		const segWriter = new SegWriter(
+			key, zerothNonce, segSizein256bs << 8, version, randomBytes, cryptor);
+		await segWriter.packing.addChain();
+		return segWriter.wrap();
 	}
 
-	async initSplicing(baseHeader: Uint8Array): Promise<void> {
-		if (baseHeader.length === 65) {
-			this.initForEndlessFile(
-				await this.cryptor.formatWN.open(baseHeader, this.key));
-		} else {
-			if ((((baseHeader.length - 46) % 30) !== 0) ||
-					(baseHeader.length < 46)) {
-				throw new Error("Given header array has incorrect size."); }
-			this.initForFiniteFile(
-				await this.cryptor.formatWN.open(baseHeader, this.key));
+	static async makeRestarted(key: Uint8Array, zerothNonce: Uint8Array,
+			header: Uint8Array, version: number, randomBytes: RNG,
+			cryptor: AsyncSBoxCryptor): Promise<SegmentsWriter> {
+		const headerContent = await cryptor.formatWN.open(header, key);
+		const segs = readSegsInfoFromHeader(headerContent);
+		const segWriter = new SegWriter(
+			key, zerothNonce, segs, version, randomBytes, cryptor);
+		return segWriter.wrap();
+	}
+
+	static async makeUpdated(key: Uint8Array, zerothNonce: Uint8Array,
+			base: ObjSource, version: number, randomBytes: RNG,
+			cryptor: AsyncSBoxCryptor): Promise<SegmentsWriter> {
+		const baseHeader = await base.readHeader();
+		const headerContent = await cryptor.formatWN.open(baseHeader, key);
+		const segs = readSegsInfoFromHeader(headerContent);
+		const segWriter = new SegWriter(
+			key, zerothNonce, segs, version, randomBytes, cryptor, base);
+		if (segWriter.packing.index.totalSegsLen === undefined) {
+			const baseSegsLen = await base.segSrc.getSize();
+			if (baseSegsLen === undefined) { throw new Error(
+				`Base object's source can't tell total segments' length.`); }
+			segWriter.packing.turnEndlessToFinite(baseSegsLen);
 		}
-		this.headerModified = false;
-		Object.seal(this);
-	}
-
-	private async initOfNewWriter(segSize: number): Promise<void> {
-		this.segSize = segSize;
-		this.totalContentLen = undefined;
-		this.totalNumOfSegments = undefined;
-		this.totalSegsLen = undefined;
-		this.segChains = [ {
-			numOfSegs: (undefined as any),
-			lastSegSize: (undefined as any),
-			nonce: await this.randomBytes(24)
-		} ];
+		return segWriter.wrap();
 	}
 	
-	async packSeg(content: Uint8Array, segInd: number):
-			Promise<{ dataLen: number; seg: Uint8Array }> {
-		const nonce = this.getSegmentNonce(segInd);
-		const expectedContentSize = this.segmentSize(segInd) - 16;
-		if (content.length < expectedContentSize) {
-			if (!this.isEndlessFile()) { throw new Error(
-					"Given content has length "+content.length+
-					", while content length of segment "+segInd+
-					" should be "+expectedContentSize); }
-		} else if (content.length > expectedContentSize) {
-			content = content.subarray(0,expectedContentSize);
+	private async packSeg(content: Uint8Array, segId: SegId):
+			Promise<Uint8Array> {
+		const segInfo = this.packing.index.segmentInfo(
+			segId, this.packing.segInfoExtender);
+		if (!segInfo) { throw writeExc('unknownSeg'); }
+		if (segInfo.type !== 'new') { throw new Error(
+			`can't pack segment ${JSON.stringify(segId)}, cause it is base`); }
+		if (!segInfo.needPacking) { throw writeExc('segsPacked'); }
+
+		if (content.length !== segInfo.contentLen) {
+			assert(!!segInfo.endlessChain && (content.length < segInfo.contentLen),
+				`Given content has length ${content.length}, while content length of segment ${segId} should be ${segInfo.contentLen}`);
+			if (!this.packing.isHeaderPacked) {
+				this.packing.turnEndlessToFinite(undefined, segId, content.length);
+			}
 		}
+
+		if (segInfo.headBytes) {
+			const headBytes = await this.readFromBase(
+				this.packing.getHeadBytesInChain(segId.chain));
+			const all = new Uint8Array(headBytes.length + content.length);
+			all.set(headBytes);
+			all.set(content, headBytes.length);
+			content = all;
+		}
+
+		const nonce = this.packing.index.segmentNonce(segId);
 		const seg = await this.cryptor.pack(content, nonce, this.key);
-		nonce.fill(0);
-		return { seg: seg, dataLen: content.length };
+
+		this.packing.markAsPacked(segId);
+		return seg;
 	}
-	
-	destroy(): void {
+
+	private async readFromBase(info: BaseBytesInfo): Promise<Uint8Array> {
+		if (!this.base) { throw new Error(`Base source is not set in writer.`); }
+		await this.base.segSrc.seek!(info.baseSeg.ofs);
+		const segBytes = await this.base.segSrc.read(info.baseSeg.len);
+		if (!segBytes) { throw new Error(
+			`Unexpected end of base segments source`); }
+		const content = await this.cryptor.open(
+			segBytes, info.baseSeg.nonce, this.key);
+		return content.subarray(info.ofs, info.ofs + info.len);
+	};
+
+	private destroy(): void {
 		this.key.fill(0);
 		this.key = (undefined as any);
-		for (let i=0; i < this.segChains.length; i+=1) {
-			this.segChains[i].nonce.fill(0);
-		}
-		this.segChains = (undefined as any);
-		this.cryptor = (undefined as any);
 	}
-	
-	async reset(): Promise<void> {
-		await this.initOfNewWriter(this.segSize);
-		this.headerModified = true;
-	}
-	
-	async packHeader(): Promise<Uint8Array> {
+
+	private async packHeader(): Promise<Uint8Array> {
+		if (this.packing.isHeaderPacked) { throw writeExc('headerPacked'); }
 		// pack head
-		let head = this.packInfoToBytes();
+		const headContent = this.packing.getHeaderContentToPack();
 		// encrypt head with a file key
-		head = await this.cryptor.formatWN.pack(head, this.headerNonce, this.key);
-		// assemble and return complete header byte array
-		this.headerModified = false;
-		return head;
+		const header = await this.cryptor.formatWN.pack(
+			headContent, this.headerNonce, this.key);
+		return header;
 	}
-	
-	setContentLength(totalSegsLen: number): void {
-		super.setContentLength(totalSegsLen);
-		this.headerModified = true;
-	}
-	
-	isHeaderModified(): boolean {
-		return this.headerModified;
-	}
-	
-	splice(pos: number, rem: number, ins: number) {
-		if (this.isEndlessFile()) {
-			throw new Error("Cannot splice endless file");
-		}
-		if (((rem < 1) && (ins < 1)) || (rem < 0) || (ins < 0)) { 
-			throw new Error("Invalid modification parameters.");
-		}
-		if ((this.totalSegsLen! - rem + ins) > 0xffffffffffff) {
-			throw new Error("Given modification will make file too long.");
-		}
-		const startLoc = this.locationInSegments(pos);
-		
-	// TODO change segments info, and return info above required
-	//      (re)encryption.
-		
-		throw new Error("Code is incomplete");
-		
-		// - calculate locations of edge bytes.
-		// let remEnd: LocationInSegment;
-		// if (rem > 0) {
-			
-		// }
-		
-	
-		// return object with info for getting bytes, and a lambda() to effect
-		// the change, which should be called after reading edge bytes.
-		
-		// return {};
-	}
-	
+
 	wrap(): SegmentsWriter {
+		const packing = this.packing;
 		const wrap: SegmentsWriter = {
-			locationInSegments: bind(this, this.locationInSegments),
-			packSeg: bind(this, this.packSeg),
-			packHeader: bind(this, this.packHeader),
-			setContentLength: bind(this, this.setContentLength),
-			splice: bind(this, this.splice),
-			isHeaderModified: bind(this, this.isHeaderModified),
-			destroy: bind(this, this.destroy),
-			reset: bind(this, this.reset),
-			isEndlessFile: bind(this, this.isEndlessFile),
-			contentLength: bind(this, this.contentLength),
-			segmentSize: bind(this, this.segmentSize),
-			segmentsLength: bind(this, this.segmentsLength),
-			numberOfSegments: bind(this, this.numberOfSegments),
-			version: this.version
+			locateContentOfs: pos => packing.index.locateContentOfs(pos),
+			locateSegsOfs: segsOfs => packing.index.locateSegsOfs(segsOfs),
+			packSeg: this.packSeg.bind(this),
+			splice: (pos, rem, ins) => packing.splice(pos, rem, ins),
+			packHeader: this.packHeader.bind(this),
+			unpackedReencryptChainSegs: () => packing.unpackedReencryptChainSegs(),
+			destroy: this.destroy.bind(this),
+			get isEndlessFile() {
+				return (packing.index.totalSegsLen === undefined);
+			},
+			get contentLength() {
+				return packing.index.totalContentLen;
+			},
+			get segmentsLength() {
+				return packing.index.totalSegsLen;
+			},
+			defaultSegSize: packing.index.defaultSegSize,
+			version: this.version,
+			segmentInfo: s => packing.index.segmentInfo(
+				s, packing.segInfoExtender),
+			segmentInfos: fstSeg => packing.index.segmentInfos(fstSeg,
+				packing.segInfoExtender),
+			get isHeaderPacked() {
+				return packing.isHeaderPacked;
+			},
+			get areSegmentsPacked() {
+				return packing.areSegmentsPacked;
+			},
+			showContentLayout: () => packing.showLayout(),
+			showPackedLayout: () => packing.showPackedLayout(),
+			setContentLength: len => packing.setContentLength(len),
+			hasBase: !!this.base
 		};
 		Object.freeze(wrap);
 		return wrap;
@@ -267,5 +325,35 @@ class SegWriter extends SegInfoHolder implements SegmentsWriter {
 }
 Object.freeze(SegWriter.prototype);
 Object.freeze(SegWriter);
+
+export interface BaseBytesInfo {
+	/**
+	 * This identifies whole base segment.
+	 */
+	baseSeg: {
+		ofs: number;
+		contentOfs: number;
+		len: number;
+		nonce: Uint8Array;
+	};
+	/**
+	 * Offset in base segment's content.
+	 */
+	ofs: number;
+	/**
+	 * Content length from base segment. Respective packed length differs by
+	 * poly's length.
+	 */
+	len: number;
+}
+
+export type WriteExcFlag = 'segsPacked' | 'headerPacked' | 'unknownSeg' |
+	'argsOutOfBounds';
+
+export function writeExc(flag: WriteExcFlag, msg?: string, cause?: any): Exception {
+	const e = makeBaseException(msg, cause);
+	e[flag] = true;
+	return e;
+}
 
 Object.freeze(exports);

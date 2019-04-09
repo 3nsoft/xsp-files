@@ -1,50 +1,99 @@
-/* Copyright(c) 2015 - 2017 3NSoft Inc.
- * This Source Code Form is subject to the terms of the Mozilla Public
- * License, v. 2.0. If a copy of the MPL was not distributed with this
- * file, you can obtain one at http://mozilla.org/MPL/2.0/. */
+/*
+ Copyright(c) 2015 - 2018 3NSoft Inc.
+ 
+ This program is free software: you can redistribute it and/or modify it under
+ the terms of the GNU General Public License as published by the Free Software
+ Foundation, either version 3 of the License, or (at your option) any later
+ version.
+ 
+ This program is distributed in the hope that it will be useful, but
+ WITHOUT ANY WARRANTY; without even the implied warranty of
+ MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
+ See the GNU General Public License for more details.
+ 
+ You should have received a copy of the GNU General Public License along with
+ this program. If not, see <http://www.gnu.org/licenses/>. */
 
 /**
  * This file contains code for working with file headers and (un)packing
  * file segments.
- * Exported classes should be used inside xsp library, and must be wrapped,
- * if such functionality is needed externally.
+ * Exported utility should be used inside xsp library.
  */
 
-import { calculateNonce } from '../crypt-utils';
+import { calculateNonce, POLY_LENGTH, NONCE_LENGTH } from '../utils/crypt-utils';
 
-export interface LocationInSegment {
-	
+export interface SegsInfo {
+
 	/**
-	 * Is a position in a decrypted content of a segment.
+	 * Common segment size before encryption. Encrypted segment is poly-bytes
+	 * longer.
+	 * Last segments in segment chains may be smaller than this value.
 	 */
-	pos: number;
-	
+	segSize: number;
+
 	/**
-	 * Segment with a loaction of interest.
+	 * Array with info objects about chains of segments with related nonces.
+	 * This array shall have zero elements, if file is empty.
+	 * If it is an endless file, then the last segment chain is endless.
 	 */
-	seg: {
-		
-		/**
-		 * Index that points to the segment in the file.
-		 */
-		ind: number;
-		
-		/**
-		 * Segment's start in the encrypted file.
-		 */
-		start: number;
-		
-		/**
-		 * Length of encrypted segment.
-		 */
-		len: number;
-	};
+	segChains: SegsChainInfo[];
+
 }
 
-export interface ChainedSegsInfo {
+export interface AttrSegInfo {
+	nonce: Uint8Array;
+	size: number;
+}
+
+export interface FiniteSegsChainInfo {
 	nonce: Uint8Array;
 	numOfSegs: number;
 	lastSegSize: number;
+	isEndless?: undefined;
+}
+
+export interface EndlessSegsChainInfo {
+	nonce: Uint8Array;
+	isEndless: true;
+}
+
+export type SegsChainInfo = FiniteSegsChainInfo|EndlessSegsChainInfo;
+
+export function headerContentFor(s: SegsInfo): Uint8Array {
+	return assembleV1HeaderContent(s);
+}
+
+function assembleV1HeaderContent(s: SegsInfo): Uint8Array {
+	const headerLen = 1 + 2 + (3 + 4 + NONCE_LENGTH)*s.segChains.length;
+	const h = new Uint8Array(headerLen);
+	let pos = 0;
+	
+	// 1) version byte
+	h[pos] = 1;
+	pos += 1;
+
+	// 3) segment size in 256 byte units
+	storeUintIn2Bytes(h, pos, s.segSize >>> 8);
+	pos += 2;
+
+	// 4) segment chains
+	for (let i=0; i<s.segChains.length; i+=1) {
+		const chainInfo = s.segChains[i];
+		// 4.1) number of segments in the chain
+		const numOfSegs = (chainInfo.isEndless ?
+			MAX_SEG_INDEX : chainInfo.numOfSegs);
+		storeUintIn4Bytes(h, pos, numOfSegs);
+		pos += 4;
+		// 4.2) last segment size
+		const lastSegSize = (chainInfo.isEndless ?
+			s.segSize : chainInfo.lastSegSize);
+		storeUintIn3Bytes(h, pos, lastSegSize);
+		pos += 3;
+		// 4.3) 1st segment nonce
+		h.set(chainInfo.nonce, pos);
+		pos += chainInfo.nonce.length;
+	}
+	return h;
 }
 
 /**
@@ -71,11 +120,36 @@ function storeUintIn2Bytes(x: Uint8Array, i: number, u: number): void {
 /**
  * @param x
  * @param i
+ * @return unsigned 24-bit integer (3 bytes), stored big-endian way in x,
+ * starting at index i.
+ */
+function loadUintFrom3Bytes(x: Uint8Array, i: number): number {
+	return (x[i] << 16) | (x[i+1] << 8) | x[i+2];
+}
+
+/**
+ * @param x
+ * @param i
+ * @param u is an unsigned 24-bit integer (3 bytes) to be stored big-endian
+ * way in x, starting at index i.
+ */
+function storeUintIn3Bytes(x: Uint8Array, i: number, u: number): void {
+	x[i] = u >>> 16;
+	x[i+1] = u >>> 8;
+	x[i+2] = u;
+}
+
+/**
+ * @param x
+ * @param i
  * @return unsigned 32-bit integer (4 bytes), stored big-endian way in x,
  * starting at index i.
  */
 function loadUintFrom4Bytes(x: Uint8Array, i: number): number {
-	return (x[i] << 24) | (x[i+1] << 16) | (x[i+2] << 8) | x[i+3];
+	// Note that (x << 24) may produce negative number, probably due to
+	// treating intermediate integer as signed, and pulling sign to resulting
+	// float number. Hence, we need a bit different operation here.
+	return x[i]*0x1000000 + ((x[i+1] << 16) | (x[i+2] << 8) | x[i+3]);
 }
 
 /**
@@ -91,354 +165,327 @@ function storeUintIn4Bytes(x: Uint8Array, i: number, u: number): void {
 	x[i+3] = u;
 }
 
-/**
- * @param x
- * @param i
- * @return unsigned 40-bit integer (5 bytes), stored big-endian way in x,
- * starting at index i.
- */
-function loadUintFrom5Bytes(x: Uint8Array, i: number): number {
-	let int = (x[i+1] << 24) | (x[i+2] << 16) | (x[i+3] << 8) | x[i+4];
-	int += 0x100000000 * x[i];
-	return int;
+export function readSegsInfoFromHeader(h: Uint8Array): SegsInfo {
+	return readV1Header(h);
 }
 
-/**
- * @param x
- * @param i
- * @param u is an unsigned 40-bit integer (5 bytes) to be stored big-endian
- * way in x, starting at index i.
- */
-function storeUintIn5Bytes(x: Uint8Array, i: number, u: number): void {
-	x[i] = (u / 0x100000000) | 0;
-	x[i+1] = u >>> 24;
-	x[i+2] = u >>> 16;
-	x[i+3] = u >>> 8;
-	x[i+4] = u;
+export interface Exception {
+	runtimeException: true;
+	type: 'xsp';
+	msg?: string,
+	cause?: any;
 }
 
-export interface SegsInfo {
-	
-	/**
-	 * This returns true, if this file is endless, and false, otherwise.
-	 */
-	isEndlessFile(): boolean;
-	
-	/**
-	 * This returns number of content bytes, incrypted in this file. If file is
-	 * endless, undefined is returned.
-	 */
-	contentLength(): number|undefined;
-	
-	segmentsLength(): number|undefined;
-	
-	segmentSize(segInd: number): number;
-	
-	numberOfSegments(): number|undefined;
-
+export function makeBaseException(msg?: string, cause?: any): Exception {
+	return { runtimeException: true, type: 'xsp', msg, cause };
 }
 
-export abstract class SegInfoHolder implements SegsInfo {
-	
-	/**
-	 * Total length of encrypted segments.
-	 * Endless file has this field set to undefined.
-	 */
-	protected totalSegsLen: number|undefined;
-	
-	/**
-	 * Total length of content bytes in this file.
-	 * Endless file has this field set to undefined.
-	 */
-	protected totalContentLen: number|undefined;
-	
-	/**
-	 * Total number of segment, for a fast boundary check.
-	 * Endless file has this field set to undefined.
-	 */
-	protected totalNumOfSegments: number|undefined;
-	
-	/**
-	 * Common encrypted segment size.
-	 * Odd segments must be smaller than this value.
-	 */
-	protected segSize: number;
-	
-	/**
-	 * Array with info objects about chains of segments with related nonces.
-	 * This array shall have zero elements, if file is empty.
-	 * If it is an endless file, then a single element shall have
-	 * first segments' nonce, while all other numeric fields shall be undefined.
-	 */
-	protected segChains: ChainedSegsInfo[];
-	
-	/**
-	 * Use this methods in inheriting classes.
-	 * @param header is a decrypted header array, containing
-	 * 1) 1 byte, indicating segment size in 256byte chuncks, and
-	 * 2) 24 bytes of the first segment's nonce.
-	 */
-	protected initForEndlessFile(header: Uint8Array): void {
-		this.totalSegsLen = undefined;
-		this.totalContentLen = undefined;
-		this.totalNumOfSegments = undefined;
-		this.segSize = (header[0] << 8);
-		this.segChains = [ {
-			numOfSegs: (undefined as any),
-			lastSegSize: (undefined as any),
-			nonce: new Uint8Array(header.subarray(1, 25))
-		} ];
-		header.fill(0);
-	}
-	
-	/**
-	 * Use this methods in inheriting classes.
-	 * @param header is a decrypted header array, containing
-	 * 1) 5 bytes with total segments' length,
-	 * 2) 1 byte, indicating segment size in 256byte chuncks
-	 * 3) n 30-bytes chunks for each segments chain (n===0 for an empty file):
-	 * 3.1) 4 bytes with number of segments in this chain,
-	 * 3.2) 2 bytes with this chain's last segments size,
-	 * 3.3) 24 bytes with the first nonce in this chain.
-	 */
-	protected initForFiniteFile(header: Uint8Array): void {
-		this.totalSegsLen = loadUintFrom5Bytes(header, 0);
-		this.segSize = (header[5] << 8);
-		if (this.segSize === 0) { throw new Error(
-			"Given header is malformed: default segment size is zero"); }
-		
-		// empty file
-		if (this.totalSegsLen === 0) {
-			this.segChains = [];
-			this.totalContentLen = 0;
-			this.totalNumOfSegments = 0;
-			return;
-		}
-		
-		// non-empty file
-		this.segChains = new Array<ChainedSegsInfo>((header.length-6) / 30);
-		let segChain: ChainedSegsInfo;
-		this.totalContentLen = 0;
-		this.totalNumOfSegments = 0;
-		let isHeaderOK = 1;		// 1 for OK, and 0 for not-OK
-		let offset = 6;
-		for (let i=0; i < this.segChains.length; i+=1) {
-			offset += i*30;
-			segChain = {
-				numOfSegs: loadUintFrom4Bytes(header, offset),
-				lastSegSize: loadUintFrom2Bytes(header, offset+4),
-				nonce: new Uint8Array(header.subarray(offset+6, offset+30))
-			};
-			this.segChains[i] = segChain;
-			// collect totals
-			this.totalContentLen += segChain.lastSegSize +
-					this.segSize * (segChain.numOfSegs - 1) -
-					16 * segChain.numOfSegs;
-			this.totalNumOfSegments += segChain.numOfSegs;
-			// check consistency of segments' length information
-			isHeaderOK *= ((segChain.numOfSegs < 1) ? 0 : 1) *
-				((segChain.lastSegSize < 17) ? 0 : 1) *
-				((segChain.lastSegSize > this.segSize) ? 0 : 1);
-		}
-		header.fill(0);
-		// check consistency of totals
-		isHeaderOK *= ((this.totalSegsLen ===
-				((this.totalContentLen + 16*this.totalNumOfSegments))) ? 1 : 0);
-		if (isHeaderOK === 0) { throw new Error("Given header is malformed."); }
-	}
-	
-	isEndlessFile(): boolean {
-		return (this.totalNumOfSegments === undefined);
-	}
-	
-	contentLength(): number|undefined {
-		return this.totalContentLen;
-	}
-	
-	setContentLength(totalContentLen: number): void {
-		if (!this.isEndlessFile()) { throw new Error(
-				"Cannot set an end to an already finite file."); }
-		if (totalContentLen < 0) { throw new Error(
-				"File length is out of bounds."); }
-		if (totalContentLen === 0) {
-			this.totalContentLen = 0;
-			this.totalNumOfSegments = 0;
-			this.totalSegsLen = 0;
-			this.segChains = [];
+export type ExceptionFlag = 'inputParsing' | 'argsOutOfBounds' | 'unknownSeg' |
+	'concurrentIteration';
+
+export function exception(flag: ExceptionFlag, msg?: string, cause?: any):
+		Exception {
+	const e = makeBaseException(msg, cause);
+	e[flag] = true;
+	return e;
+}
+
+export function inputException(msg?: string, cause?: any): Exception {
+	return exception('inputParsing', msg, cause);
+}
+
+function readV1Header(h: Uint8Array): SegsInfo {
+	if (!isV1HeaderLength(h.length)) { throw inputException(
+		`Header content size ${h.length} doesn't correspond to version 1.`); }
+
+	// 1) check version byte
+	if (h[0] !== 1) { throw inputException(
+		`Given header version is ${h[0]} instead of 1`); }
+	let pos = 1;
+
+	// 3) segment size in 256 byte units
+	const segSize = loadUintFrom2Bytes(h, pos) << 8;
+	pos += 2;
+
+	// 4) segment chains
+	const segChains: SegsChainInfo[] = [];
+	while (pos < h.length) {
+		// 4.1) number of segments in the chain
+		const numOfSegs = loadUintFrom4Bytes(h, pos);
+		pos += 4;
+		// 4.2) last segment size
+		const lastSegSize = loadUintFrom3Bytes(h, pos);
+		pos += 3;
+		// 4.3) 1st segment nonce
+		const nonce = new Uint8Array(h.subarray(pos, pos+NONCE_LENGTH));
+		pos += NONCE_LENGTH;
+		// distinguish between finite and endless segment chains
+		let chainInfo: SegsChainInfo;
+		if ((numOfSegs === MAX_SEG_INDEX) && (lastSegSize === segSize)) {
+			if (pos < h.length) { throw inputException(
+				`Invalid header: endless segment chain isn't the last.`); }
+			chainInfo = { isEndless: true, nonce };
 		} else {
-			let numOfSegs =  Math.floor(totalContentLen / (this.segSize - 16));
-			if (numOfSegs*(this.segSize-16) != totalContentLen) {
-				numOfSegs += 1;
-			}
-			const totalSegsLen = totalContentLen + 16*numOfSegs;
-			if (totalSegsLen > 0xffffffffff) {	throw new Error(
-					"Content length is out of bounds."); }
-			this.totalContentLen = totalContentLen;
-			this.totalNumOfSegments = numOfSegs;
-			this.totalSegsLen = totalSegsLen;
-			const segChain = this.segChains[0];
-			segChain.numOfSegs = this.totalNumOfSegments;
-			segChain.lastSegSize = this.totalSegsLen -
-				(this.totalNumOfSegments - 1)*this.segSize;
+			chainInfo = { numOfSegs, lastSegSize, nonce };
 		}
+		segChains.push(chainInfo);
 	}
-	
+
+	return { segChains, segSize };
+}
+
+function isV1HeaderLength(len: number): boolean {
+	len -= (1 + 2);
+	if (len < 0) { return false; }
+	if ((len % 31) === 0) { return true; }
+	len -= 24;
+	if (len < 0) { return false; }
+	return ((len % 31) === 0);
+}
+
+export interface SegId {
+	chain: number;
+	seg: number;
+}
+
+interface ChainLocations {
+	chain: SegsChainInfo;
+	content: {
+		start: number;
+		end?: number;
+	};
+	packed: {
+		start: number;
+		end?: number;
+	};
+}
+
+export interface LocationInSegment extends SegId {
+	posInSeg: number;
+}
+
+export interface SegmentInfo extends SegId {
+
 	/**
-	 * @param pos is byte's position index in file content.
-	 * @return corresponding location in segment with segment's info.
+	 * Offset of the packed segment in all of segment bytes.
 	 */
-	locationInSegments(pos: number): LocationInSegment {
-		if (pos < 0) { throw new Error("Given position is out of bounds."); }
-		const contentSegSize = this.segSize - 16;
-		let segInd: number;
-		if (this.isEndlessFile()) {
-			segInd = Math.floor(pos / contentSegSize);
-			return {
-				seg: {
-					ind: segInd,
-					start: (segInd * this.segSize),
-					len: this.segSize
-				},
-				pos: (pos - segInd * contentSegSize)
-			};
-		}
-		if (pos >= this.totalContentLen!) { throw new Error(
-				"Given position is out of bounds."); }
-		segInd = 0;
-		let segStart = 0;
+	packedOfs: number;
+
+	/**
+	 * Packed segment's length. If segment chain is endless, segment can be
+	 * shorter.
+	 */
+	packedLen: number;
+
+	/**
+	 * Offset of segment's content in all of content.
+	 */
+	contentOfs: number;
+
+	/**
+	 * Length of content in this segment. If segment chain is endless, segment
+	 * can be shorter.
+	 */
+	contentLen: number;
+
+	/**
+	 * This flag's true value indicates that segment's chain is endless.
+	 */
+	endlessChain?: true;
+
+}
+
+export class Locations {
+
+	private locations: ChainLocations[] = [];
+	private variant = { num: 0 };
+
+	constructor(
+		private segs: SegsInfo
+	) {
+		this.update();
+		Object.seal(this);
+	}
+
+	update(): void {
+		this.locations = [];
 		let contentOffset = 0;
-		let segChain: ChainedSegsInfo;
-		let chainLen: number;
-		for (let i=0; i < this.segChains.length; i+=1) {
-			segChain = this.segChains[i];
-			chainLen = segChain.lastSegSize +
-					(segChain.numOfSegs - 1)*this.segSize;
-			contentOffset += chainLen - 16*segChain.numOfSegs;
-			if (contentOffset <= pos) {
-				segInd += segChain.numOfSegs;
-				segStart += chainLen;
-				continue;
-			}
-			// @ this point contentOffset > pos
-			contentOffset -= segChain.lastSegSize-16;
-			if (contentOffset <= pos) {
-				return {
-					pos: (pos - contentOffset),
-					seg: {
-						ind: (segInd + segChain.numOfSegs - 1),
-						start: (chainLen - segChain.lastSegSize),
-						len: segChain.lastSegSize
+		let offset = 0;
+		for (let chain of this.segs.segChains) {
+			let chainLocations: ChainLocations;
+			if (chain.isEndless) {
+				chainLocations = {
+					chain,
+					packed: {
+						start: offset,
+					},
+					content: {
+						start: contentOffset,
 					}
 				};
-			}
-			contentOffset -= (segChain.numOfSegs - 1)*(this.segSize-16);
-			const dSegInd = Math.floor((pos - contentOffset) / contentSegSize);
-			contentOffset += dSegInd*(this.segSize-16);
-			return {
-				pos: (pos - contentOffset),
-				seg: {
-					ind: (segInd + dSegInd),
-					start: (segStart + dSegInd * this.segSize),
-					len: this.segSize
-				}
-			};
-		}
-		throw new Error("If we get here, there is an error in the loop above.");
-	}
-	
-	protected packInfoToBytes(): Uint8Array {
-		let head: Uint8Array;
-		if (this.isEndlessFile()) {
-			head = new Uint8Array(24 + 1);
-			// 1) pack segment common size in 256 chunks
-			head[0] = this.segSize >>> 8;
-			// 2) 24 bytes with the first segment's nonce
-			head.set(this.segChains[0].nonce, 1);
-		} else {
-			head = new Uint8Array(6 + 30*this.segChains.length);
-			// 1) pack total segments length
-			storeUintIn5Bytes(head, 0, this.totalSegsLen!);
-			// 2) pack segment common size in 256 chunks
-			head[5] = this.segSize >>> 8;
-			// 3) pack info about chained segments
-			let segChain: ChainedSegsInfo;
-			let offset = 6;
-			for (let i=0; i < this.segChains.length; i+=1) {
-				segChain = this.segChains[i];
-				// 3.1) 4 bytes with number of segments in this chain
-				storeUintIn4Bytes(head, offset, segChain.numOfSegs);
-				// 3.2) 2 bytes with this chain's last segments size
-				storeUintIn2Bytes(head, offset + 4, segChain.lastSegSize);
-				// 3.3) 24 bytes with the first nonce in this chain
-				head.set(segChain.nonce, offset + 6);
-				// add an offset
-				offset += 30;
-			}
-		}
-		return head;
-	}
-	
-	/**
-	 * This returns segment's nonce. Byte array is not shared.
-	 * @param segInd
-	 */
-	protected getSegmentNonce(segInd: number): Uint8Array {
-		if (this.isEndlessFile()) {
-			if (segInd > 0xffffffff) { throw new Error(
-					"Given segment index is out of bounds."); }
-			return calculateNonce(this.segChains[0].nonce, segInd);
-		}
-		if ((segInd >= this.totalNumOfSegments!) ||
-				(segInd < 0)) { throw new Error(
-				"Given segment index is out of bounds."); }
-		let segChain: ChainedSegsInfo;
-		let lastSegInd = 0;
-		for (let i=0; i < this.segChains.length; i+=1) {
-			segChain = this.segChains[i];
-			if ((lastSegInd + segChain.numOfSegs) <= segInd) {
-				lastSegInd += segChain.numOfSegs;
-				continue;
 			} else {
-				return calculateNonce(segChain.nonce, (segInd - lastSegInd));
+				const contentLen = (chain.numOfSegs-1)*this.segs.segSize + chain.lastSegSize;
+				const packedSize = contentLen + chain.numOfSegs*POLY_LENGTH;
+				chainLocations = {
+					chain,
+					packed: {
+						start: offset,
+						end: offset + packedSize
+					},
+					content: {
+						start: contentOffset,
+						end: contentOffset + contentLen
+					}
+				};
+				offset = chainLocations.packed.end!;
+				contentOffset = chainLocations.content.end!;
 			}
+			this.locations.push(chainLocations);
 		}
-		throw new Error("If we get here, there is an error in the loop above.");
+		this.variant.num += 1;
 	}
-	
-	numberOfSegments(): number|undefined {
-		return this.totalNumOfSegments;
+
+	get defaultSegSize(): number {
+		return this.segs.segSize;
 	}
-	
-	segmentSize(segInd: number): number {
-		if (typeof segInd !== 'number') { throw new TypeError(`Given segment index is not a number, it is ${segInd}`); }
-		if (this.isEndlessFile()) {
-			if (segInd > 0xffffffff) { throw new Error(
-					"Given segment index is out of bounds."); }
-			return this.segSize;
+
+	get totalSegsLen(): number|undefined {
+		if (this.locations.length === 0) { return 0; }
+		const lastChain = this.locations[this.locations.length-1];
+		return lastChain.packed.end;
+	}
+
+	get totalContentLen(): number|undefined {
+		if (this.locations.length === 0) { return 0; }
+		const lastChain = this.locations[this.locations.length-1];
+		return lastChain.content.end;
+	}
+
+	locateContentOfs(contentPosition: number): LocationInSegment {
+		if (contentPosition < 0) { throw exception('argsOutOfBounds',
+			"Given position is out of bounds."); }
+
+		const chain = this.locations.findIndex(l => ((l.content.end === undefined) ? true : (l.content.end > contentPosition)));
+		if (chain < 0) { throw exception('argsOutOfBounds',
+			"Given position is out of bounds."); }
+
+		const l = this.locations[chain];
+		contentPosition -= l.content.start;
+		const seg = Math.floor(contentPosition / this.segs.segSize);
+		const posInSeg = (contentPosition - seg*this.segs.segSize);
+		return { chain, seg, posInSeg };
+	}
+
+	locateSegsOfs(segsOfs: number): LocationInSegment {
+		if (segsOfs < 0) { throw exception('argsOutOfBounds',
+			"Given segment offset is out of bounds."); }
+
+		const chain = this.locations.findIndex(l => ((l.packed.end === undefined) ? true : (l.packed.end > segsOfs)));
+		if (chain < 0) { throw exception('argsOutOfBounds',
+			"Given position is out of bounds."); }
+
+		const l = this.locations[chain];
+		segsOfs -= l.packed.start;
+		const seg = Math.floor(segsOfs / (this.segs.segSize + POLY_LENGTH));
+		const posInSeg = (segsOfs - seg*(this.segs.segSize + POLY_LENGTH));
+		return { chain, seg, posInSeg };
+	}
+
+	getChainLocations(indOrChain: number|SegsChainInfo):
+			ChainLocations|undefined {
+		if (typeof indOrChain === 'number') {
+			return this.locations[indOrChain];
+		} else {
+			return this.locations.find(l => (l.chain === indOrChain));
 		}
-		if ((segInd >= this.totalNumOfSegments!) ||
-				(segInd < 0)) { throw new Error(
-				"Given segment index is out of bounds."); }
-		let segChain: ChainedSegsInfo;
-		let lastSegInd = 0;
-		for (let i=0; i < this.segChains.length; i+=1) {
-			segChain = this.segChains[i];
-			if ((lastSegInd + segChain.numOfSegs) <= segInd) {
-				lastSegInd += segChain.numOfSegs;
-				continue;
-			}
-			return (((lastSegInd + segChain.numOfSegs - 1) === segInd) ?
-						segChain.lastSegSize : this.segSize);
+	}
+
+	segmentInfo<T extends SegmentInfo>(segId: SegId,
+			infoExtender?: InfoExtender<T>): T {
+		const l = this.locations[segId.chain];
+		if (!l) { throw exception('argsOutOfBounds',
+			`Chain ${segId.chain} is not found`); }
+		return segmentInfo(
+			segId.chain, segId.seg, l, this.segs.segSize, infoExtender);
+	}
+
+	segmentInfos<T extends SegmentInfo>(fstSeg?: SegId,
+			infoExtender?: InfoExtender<T>): IterableIterator<T> {
+		return segmentInfos(
+			this.locations, this.segs.segSize, this.variant, fstSeg, infoExtender);
+	}
+
+	segmentNonce(segId: SegId): Uint8Array {
+		const chain = this.segs.segChains[segId.chain];
+		if (!chain) { throw exception('unknownSeg'); }
+		if (chain.isEndless) {
+			if (segId.seg > MAX_SEG_INDEX) { throw exception('unknownSeg'); }
+			return calculateNonce(chain.nonce, segId.seg);
+		} else if (segId.seg < chain.numOfSegs) {
+			return calculateNonce(chain.nonce, segId.seg);
+		} else {
+			throw exception('unknownSeg');
 		}
-		throw new Error("If we get here, there is an error in the loop above.");
 	}
-	
-	segmentsLength(): number|undefined {
-		return this.totalSegsLen;
-	}
-	
+
 }
-Object.freeze(SegInfoHolder.prototype);
-Object.freeze(SegInfoHolder);
+Object.freeze(Locations.prototype);
+Object.freeze(Locations);
+
+export const MAX_SEG_INDEX = 0xffffffff;
+
+export type InfoExtender<T extends SegmentInfo> =
+	(chain: SegsChainInfo, segInd: number, info: T) => T;
+
+function segmentInfo<T extends SegmentInfo>(chain: number, seg: number,
+		l: ChainLocations, segSize: number, infoExtender?: InfoExtender<T>): T {
+	if (seg < 0) { throw exception('argsOutOfBounds',
+		`Invalid segment index ${seg}`); }
+	const contentOfs = l.content.start + seg*segSize;
+	const packedOfs = l.packed.start + seg*(segSize+POLY_LENGTH);
+	let s: SegmentInfo;
+	if (l.chain.isEndless) {
+		const contentLen = segSize;
+		const packedLen = contentLen + POLY_LENGTH;
+		s = { chain, seg,
+			endlessChain: true, packedOfs, packedLen, contentOfs, contentLen };
+	} else {
+		if (seg >= l.chain.numOfSegs) { throw exception('argsOutOfBounds',
+			`Segment ${seg} is not found`); }
+		const lastSeg = (seg === (l.chain.numOfSegs-1));
+		const contentLen = (lastSeg ? l.chain.lastSegSize : segSize);
+		const packedLen = contentLen + POLY_LENGTH;
+		s = { chain, seg, packedOfs, packedLen, contentOfs, contentLen };
+	}
+	return (infoExtender ? infoExtender(l.chain, seg, s as T): (s as T));
+}
+
+function* segmentInfos<T extends SegmentInfo>(locations: ChainLocations[],
+		segSize: number, variant: { num: number; }, fstSeg?: SegId,
+		infoExtender?: InfoExtender<T>): IterableIterator<T> {
+	const initVariant = variant.num;
+	let fstChainInd = 0;
+	let fstSegInd = 0;
+	if (fstSeg) {
+		fstChainInd = fstSeg.chain;
+		fstSegInd = fstSeg.seg;
+	}
+	for (let chain=fstChainInd; chain<locations.length; chain+=1) {
+		if (initVariant !== variant.num) { throw exception('concurrentIteration',
+			`Can't iterate cause underlying index has changed.`); }
+		const l = locations[chain];
+		const segIndexLimit = (l.chain.isEndless ?
+			MAX_SEG_INDEX+1 : l.chain.numOfSegs);
+		for (let seg=fstSegInd; seg<segIndexLimit; seg+=1) {
+			if (initVariant !== variant.num) { throw exception(
+				'concurrentIteration',
+				`Can't iterate cause underlying index has changed.`); }
+			yield segmentInfo(chain, seg, l, segSize, infoExtender);
+		}
+		fstSegInd = 0;
+		if (l.chain.isEndless) { throw new Error(
+			`Generator in endless chain is not suuposed to be run till its done, and it has already run all allowed segment index values.`); }
+	}
+}
 
 Object.freeze(exports);
