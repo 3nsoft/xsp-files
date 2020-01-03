@@ -15,16 +15,115 @@
  this program. If not, see <http://www.gnu.org/licenses/>. */
 
 import { itAsync, beforeEachAsync } from '../../test-lib/async-jasmine';
-import { makeSegmentsWriter, NONCE_LENGTH, KEY_LENGTH, makeSegmentsReader, ByteSink, Layout, ObjSource, makeEncryptingByteSink, EncrEvent, SegEncrEvent } from '../../lib';
+import { makeSegmentsWriter, NONCE_LENGTH, KEY_LENGTH, makeSegmentsReader, ByteSink, Layout, ObjSource, makeEncryptingByteSink, EncrEvent, SegEncrEvent, ByteSinkWithAttrs, makeEncryptingByteSinkWithAttrs } from '../../lib';
 import { mockCryptor, getRandom, compare, objSrcFromArrays } from '../../test-lib/test-utils';
 import { Observable, Observer } from 'rxjs';
 import { share, tap } from 'rxjs/operators';
 import { readSegsSequentially, packSegments } from '../segments/xsp';
 import { assert } from '../../lib/utils/assert';
+import { SegmentWriterMakeOpt } from '../../lib/segments/writer';
+import { storeUintIn4Bytes } from '../../lib/segments/xsp-info';
 
 const cryptor = mockCryptor();
 
-describe(`Encrypting byte writer, created by makeEncryptingByteWriter`, () => {
+function startProcessingWriteEvents(
+	enc$: Observable<EncrEvent>, base: ObjSource|undefined
+): Promise<{ header: Uint8Array; allSegs: Uint8Array; }> {
+	let header: Uint8Array;
+	let layout: Layout;
+	let segs: SegEncrEvent[] = [];
+	return enc$.pipe(
+		tap(ev => {
+			if (ev.type === 'header') {
+				header = ev.header;
+				layout = ev.layout;
+			} else if (ev.type === 'seg') {
+				segs.push(ev);
+			} else {
+				throw new Error(`Unknown encryption event type`);
+			}
+		})
+	).toPromise()
+	.then(async () => {
+		if (layout.sections.length === 0) {
+			if (segs.length !== 0) { throw new Error(
+				`Layout has zero length, while there are new segments`); }
+			return { header, allSegs: new Uint8Array(0) };
+		}
+
+		segs.sort((a, b) => {
+			const aStart = a.segInfo.packedOfs;
+			const aEnd = aStart + a.segInfo.packedLen;
+			const bStart = b.segInfo.packedOfs;
+			const bEnd = bStart + b.segInfo.packedLen;
+			if (aEnd <= bStart) { return -1; }
+			if (bEnd <= aStart) { return 1; }
+			throw new Error(`Have an overlapping segments`);
+		});
+
+		// we'll use layout to find total packed length that may include base
+		// sections, this allows to perform checks of layout array object
+		let totalLen = ((layout.sections.length === 0) ?
+			0 : layout.sections[layout.sections.length-1].ofs);
+		for (let i=0; i<layout.sections.length; i+=1) {
+			const chunk = layout.sections[i];
+			if (chunk.src === 'new') {
+				if (chunk.len === undefined) {
+					if ((i+1) < layout.sections.length) { throw new Error(
+						`Layout chunk with undefined length is not the last chunk in the layout`); }
+					const lastNewSeg = segs[segs.length-1];
+					totalLen = lastNewSeg.segInfo.packedOfs + lastNewSeg.segInfo.packedLen;
+				} else {
+					assert(chunk.len > 0);
+					totalLen += chunk.len;
+				}
+			} else if (chunk.src === 'base') {
+				if (!base) { throw new Error(
+					`Layout has base section, while there is no base given`); }
+				assert(chunk.len > 0);
+				totalLen += chunk.len;
+			} else {
+				throw new Error(`Unknown value of src field in layout info`);
+			}
+		}
+
+		const allSegs = new Uint8Array(totalLen);
+
+		// write new segments
+		for (const s of segs) {
+			allSegs.set(s.seg, s.segInfo.packedOfs);
+		}
+
+		// add base bytes, if there are any
+		if (base) {
+			for (const chunk of layout.sections) {
+				if (chunk.src !== 'base') { continue; }
+				await base.segSrc.seek(chunk.baseOfs);
+				const baseChunk = await base.segSrc.read(chunk.len);
+				if (!baseChunk
+				|| (baseChunk.length !== chunk.len)) { throw new Error(
+					`Not enough base segment bytes`); }
+				allSegs.set(baseChunk, chunk.ofs);
+			}
+		}
+
+		return { header, allSegs };
+	});
+}
+
+async function compareContent(
+	key: Uint8Array, zerothNonce: Uint8Array, version: number,
+	completion: Promise<{ header: Uint8Array; allSegs: Uint8Array; }>,
+	expectation: Uint8Array
+): Promise<void> {
+	const { header, allSegs } = await completion;
+	const segReader = await makeSegmentsReader(
+		key, zerothNonce, version, header, cryptor);
+	const decrContent = await readSegsSequentially(segReader, allSegs);
+	compare(decrContent, expectation);
+}
+
+describe(`Encrypting byte sink (underlying version format 1)`, () => {
 
 	let key: Uint8Array;
 	let zerothNonce: Uint8Array;
@@ -35,107 +134,24 @@ describe(`Encrypting byte writer, created by makeEncryptingByteWriter`, () => {
 		zerothNonce = await getRandom(NONCE_LENGTH);
 	});
 
-	async function makeSink(base?: ObjSource):
-			Promise<{ byteSink: ByteSink;
-						completion: Promise<{ header: Uint8Array; allSegs: Uint8Array; }> }> {
+	async function makeSink(
+		base?: ObjSource
+	): Promise<{ byteSink: ByteSink;
+			completion: Promise<{ header: Uint8Array; allSegs: Uint8Array; }> }> {
 		const segWriter = await makeSegmentsWriter(
 			key, zerothNonce, (base ? base.version + 1 : version),
 			(base ? { type: 'update', base } : { type: 'new', segSize: 16 }),
 			getRandom, cryptor);
-		const { sink, sub } = await makeEncryptingByteSink(segWriter);
+		const { sink, sub } = makeEncryptingByteSink(segWriter);
 		const enc$ = Observable.create((obs: Observer<EncrEvent>) => sub(obs))
 		.pipe(share());
 		const completion = startProcessingWriteEvents(enc$, base);
 		return { byteSink: sink, completion };
 	}
 
-	function startProcessingWriteEvents(enc$: Observable<EncrEvent>,
-			base: ObjSource|undefined):
-			Promise<{ header: Uint8Array; allSegs: Uint8Array; }> {
-		let header: Uint8Array;
-		let layout: Layout;
-		let segs: SegEncrEvent[] = [];
-		return enc$.pipe(
-			tap(ev => {
-				if (ev.type === 'header') {
-					header = ev.header;
-					layout = ev.layout;
-				} else if (ev.type === 'seg') {
-					segs.push(ev);
-				} else {
-					throw new Error(`Unknown encryption event type`);
-				}
-			})
-		).toPromise()
-		.then(async () => {
-			if (layout.sections.length === 0) {
-				if (segs.length !== 0) { throw new Error(
-					`Layout has zero length, while there are new segments`); }
-				return { header, allSegs: new Uint8Array(0) };
-			}
-
-			segs.sort((a, b) => {
-				const aStart = a.segInfo.packedOfs;
-				const aEnd = aStart + a.segInfo.packedLen;
-				const bStart = b.segInfo.packedOfs;
-				const bEnd = bStart + b.segInfo.packedLen;
-				if (aEnd <= bStart) { return -1; }
-				if (bEnd <= aStart) { return 1; }
-				throw new Error(`Have an overlapping segments`);
-			});
-
-			// we'll use layout to find total packed length that may include base
-			// sections, this allows to perform checks of layout array object
-			let totalLen = ((layout.sections.length === 0) ?
-				0 : layout.sections[layout.sections.length-1].ofs);
-			for (let i=0; i<layout.sections.length; i+=1) {
-				const chunk = layout.sections[i];
-				if (chunk.src === 'new') {
-					if (chunk.len === undefined) {
-						if ((i+1) < layout.sections.length) { throw new Error(
-							`Layout chunk with undefined length is not the last chunk in the layout`); }
-						const lastNewSeg = segs[segs.length-1];
-						totalLen = lastNewSeg.segInfo.packedOfs + lastNewSeg.segInfo.packedLen;
-					} else {
-						assert(chunk.len > 0);
-						totalLen += chunk.len;
-					}
-				} else if (chunk.src === 'base') {
-					if (!base) { throw new Error(
-						`Layout has base section, while there is no base given`); }
-					assert(chunk.len > 0);
-					totalLen += chunk.len;
-				} else {
-					throw new Error(`Unknown value of src field in layout info`);
-				}
-			}
-
-			const allSegs = new Uint8Array(totalLen);
-
-			// write new segments
-			for (const s of segs) {
-				allSegs.set(s.seg, s.segInfo.packedOfs);
-			}
-
-			// add base bytes, if there are any
-			if (base) {
-				for (const chunk of layout.sections) {
-					if (chunk.src !== 'base') { continue; }
-					await base.segSrc.seek(chunk.baseOfs);
-					const baseChunk = await base.segSrc.read(chunk.len);
-					if (!baseChunk
-					|| (baseChunk.length !== chunk.len)) { throw new Error(
-						`Not enough base segment bytes`); }
-					allSegs.set(baseChunk, chunk.ofs);
-				}
-			}
-
-			return { header, allSegs };
-		});
-	}
-
-	async function testSequentialWriting(content: Uint8Array,
-			setSizeUpfront: boolean, writeSize: number): Promise<void> {
+	async function testSequentialWriting(
+		content: Uint8Array, setSizeUpfront: boolean, writeSize: number
+	): Promise<void> {
 		const { byteSink, completion } = await makeSink();
 		if (setSizeUpfront) {
 			await byteSink.setSize(content.length);
@@ -179,16 +195,6 @@ describe(`Encrypting byte writer, created by makeEncryptingByteWriter`, () => {
 		}
 	});
 
-	async function compareContentAt(
-			completion: Promise<{ header: Uint8Array; allSegs: Uint8Array; }>,
-			expectation: Uint8Array): Promise<void> {
-		const { header, allSegs } = await completion;
-		const segReader = await makeSegmentsReader(
-			key, zerothNonce, version, header, cryptor);
-		const decrContent = await readSegsSequentially(segReader, allSegs);
-		compare(decrContent, expectation);
-	}
-
 	itAsync(`encrypts bytes written out of order`, async () => {
 		const { byteSink, completion } = await makeSink();
 		const content = await getRandom((4*4 + 2)*1024);
@@ -202,7 +208,7 @@ describe(`Encrypting byte writer, created by makeEncryptingByteWriter`, () => {
 		await byteSink.write(0, c1);
 		await byteSink.done();
 
-		await compareContentAt(completion, content);
+		await compareContent(key, zerothNonce, version, completion, content);
 	});
 
 	async function prepAsBase(content: Uint8Array): Promise<ObjSource> {
@@ -239,7 +245,7 @@ describe(`Encrypting byte writer, created by makeEncryptingByteWriter`, () => {
 			await byteSink.write(cut1.ofs, cut1.ins);
 			await byteSink.done();
 
-			await compareContentAt(completion, expectedContent);
+			await compareContent(key, zerothNonce, version, completion, expectedContent);
 		}
 	});
 
@@ -287,7 +293,7 @@ describe(`Encrypting byte writer, created by makeEncryptingByteWriter`, () => {
 			await byteSink.write(cut1.ofs, cut1.ins);
 			await byteSink.done();
 
-			await compareContentAt(completion, expectedContent);
+			await compareContent(key, zerothNonce, version, completion, expectedContent);
 		}
 	});
 
@@ -317,7 +323,7 @@ describe(`Encrypting byte writer, created by makeEncryptingByteWriter`, () => {
 			await byteSink.write(cut1.ofs, cut1.ins);
 			await byteSink.done();
 
-			await compareContentAt(completion, expectedContent);
+			await compareContent(key, zerothNonce, version, completion, expectedContent);
 		}
 	});
 
@@ -369,7 +375,204 @@ describe(`Encrypting byte writer, created by makeEncryptingByteWriter`, () => {
 			await byteSink.write(cut1.ofs, cut1.ins);
 			await byteSink.done();
 
-			await compareContentAt(completion, expectedContent);
+			await compareContent(key, zerothNonce, version, completion, expectedContent);
+		}
+	});
+
+});
+
+async function compareContentAndAttrs(
+	key: Uint8Array, zerothNonce: Uint8Array, version: number,
+	completion: Promise<{ header: Uint8Array; allSegs: Uint8Array; }>,
+	expectedContent: Uint8Array, expectedAttrs: Uint8Array
+): Promise<void> {
+	const { header, allSegs } = await completion;
+	const segReader = await makeSegmentsReader(
+		key, zerothNonce, version, header, cryptor);
+	const decrContent = await readSegsSequentially(segReader, allSegs);
+	const expectation = combineV2Content(expectedAttrs, expectedContent);
+	compare(decrContent, expectation);
+}
+
+export function combineV2Content(
+	attrs: Uint8Array, content: Uint8Array
+): Uint8Array {
+	const allBytes = new Uint8Array(4 + attrs.length + content.length);
+	storeUintIn4Bytes(allBytes, 0, attrs.length);
+	allBytes.set(attrs, 4);
+	allBytes.set(content, 4 + attrs.length);
+	return allBytes;
+}
+
+describe(`Encrypting byte sink with attributes (underlying version format 2)`, () => {
+
+	let key: Uint8Array;
+	let zerothNonce: Uint8Array;
+	const version = 3;
+
+	beforeEachAsync(async () => {
+		key = await getRandom(KEY_LENGTH);
+		zerothNonce = await getRandom(NONCE_LENGTH);
+	});
+
+	async function makeSink(
+		base?: ObjSource, baseAttrSize?: number
+	): Promise<{ byteSink: ByteSinkWithAttrs;
+			completion: Promise<{ header: Uint8Array; allSegs: Uint8Array; }> }> {
+		const writerOps: SegmentWriterMakeOpt = (base ?
+			{ type: 'update', base } :
+			{ type: 'new', segSize: 16, formatWithSections: true });
+		const segWriter = await makeSegmentsWriter(
+			key, zerothNonce, (base ? base.version + 1 : version),
+			writerOps, getRandom, cryptor);
+		const { sink, sub } = makeEncryptingByteSinkWithAttrs(segWriter, baseAttrSize);
+		const enc$ = Observable.create((obs: Observer<EncrEvent>) => sub(obs))
+		.pipe(share());
+		const completion = startProcessingWriteEvents(enc$, base);
+		return { byteSink: sink, completion };
+	}
+
+	itAsync(`writes attributes before writing content`, async () => {
+		const { byteSink, completion } = await makeSink();
+		const content = await getRandom((4*4 + 2)*1024);
+		const attrs = await getRandom(25);
+		const cutPos = (4*4)*1024-200;
+		const c1 = content.subarray(0, cutPos);
+		const c2 = content.subarray(cutPos);
+
+		await byteSink.writeAttrs(attrs);
+
+		// write last chunk first, and second chunk later
+		await byteSink.write(cutPos, c2);
+		await byteSink.setSize(content.length);
+		await byteSink.write(0, c1);
+		await byteSink.done();
+
+		await compareContentAndAttrs(key, zerothNonce, version, completion, content, attrs);
+	});
+
+	itAsync(`sets attributes before writing content`, async () => {
+		const { byteSink, completion } = await makeSink();
+		const content = await getRandom((4*4 + 2)*1024);
+		const attrs = await getRandom(25);
+		const cutPos = (4*4)*1024-200;
+		const c1 = content.subarray(0, cutPos);
+		const c2 = content.subarray(cutPos);
+
+		await byteSink.setAttrSectionSize(attrs.length);
+
+		// write last chunk first, attributes and second chunk later
+		await byteSink.write(cutPos, c2);
+		await byteSink.setSize(content.length);
+		await byteSink.writeAttrs(attrs);
+		await byteSink.write(0, c1);
+		await byteSink.done();
+
+		await compareContentAndAttrs(key, zerothNonce, version, completion, content, attrs);
+	});
+
+	async function prepAsBase(
+		attrs: Uint8Array, content: Uint8Array
+	): Promise<ObjSource> {
+		const baseVersion = version - 1;
+		const segWriter = await makeSegmentsWriter(
+			key, zerothNonce, baseVersion,
+			{ type: 'new', segSize: 16, formatWithSections: true },
+			getRandom, cryptor);
+		const v2bytes = combineV2Content(attrs ,content);
+		const segs = await packSegments(segWriter, v2bytes);
+		const header = await segWriter.packHeader();
+		return objSrcFromArrays(baseVersion, header, segs);
+	}
+
+	itAsync(`splices base without changing attributes`, async () => {
+		const baseContent = await getRandom((10*4)*1024 + 2000);
+		const initAttrs = await getRandom(25);
+		const baseSrc = await prepAsBase(initAttrs, baseContent);
+		const cut1 = { ofs: 3000, del: 5*4*1024, ins: await getRandom(250) };
+		const expectedContent = new Uint8Array(
+			baseContent.length
+			- cut1.del + cut1.ins.length);
+		expectedContent.set(baseContent.slice(0, cut1.ofs), 0);
+		expectedContent.set(cut1.ins, cut1.ofs);
+		expectedContent.set(
+			baseContent.slice(cut1.ofs + cut1.del),
+			cut1.ofs + cut1.ins.length);
+
+		{ // do layout change, and write in big a chunk
+			const { byteSink, completion } = await makeSink(baseSrc, initAttrs.length);
+
+			// layout change
+			await byteSink.spliceLayout(cut1.ofs, cut1.del, cut1.ins.length);
+
+			// write out new bytes
+			await byteSink.write(cut1.ofs, cut1.ins);
+			await byteSink.done();
+
+			await compareContentAndAttrs(key, zerothNonce, version, completion, expectedContent, initAttrs);
+		}
+	});
+
+	itAsync(`changes attributes then splices base`, async () => {
+		const baseContent = await getRandom((10*4)*1024 + 2000);
+		const initAttrs = await getRandom(25);
+		const baseSrc = await prepAsBase(initAttrs, baseContent);
+		const cut1 = { ofs: 3000, del: 5*4*1024, ins: await getRandom(250) };
+		const expectedContent = new Uint8Array(
+			baseContent.length
+			- cut1.del + cut1.ins.length);
+		expectedContent.set(baseContent.slice(0, cut1.ofs), 0);
+		expectedContent.set(cut1.ins, cut1.ofs);
+		expectedContent.set(
+			baseContent.slice(cut1.ofs + cut1.del),
+			cut1.ofs + cut1.ins.length);
+		const attrs = await getRandom(10);
+
+		{ // do layout change, and write in big a chunk
+			const { byteSink, completion } = await makeSink(baseSrc, initAttrs.length);
+
+			await byteSink.writeAttrs(attrs);
+
+			// layout change
+			await byteSink.spliceLayout(cut1.ofs, cut1.del, cut1.ins.length);
+
+			// write out new bytes
+			await byteSink.write(cut1.ofs, cut1.ins);
+			await byteSink.done();
+
+			await compareContentAndAttrs(key, zerothNonce, version, completion, expectedContent, attrs);
+		}
+	});
+
+	itAsync(`splices base then changes attributes`, async () => {
+		const baseContent = await getRandom((10*4)*1024 + 2000);
+		const initAttrs = await getRandom(25);
+		const baseSrc = await prepAsBase(initAttrs, baseContent);
+		const cut1 = { ofs: 3000, del: 5*4*1024, ins: await getRandom(250) };
+		const expectedContent = new Uint8Array(
+			baseContent.length
+			- cut1.del + cut1.ins.length);
+		expectedContent.set(baseContent.slice(0, cut1.ofs), 0);
+		expectedContent.set(cut1.ins, cut1.ofs);
+		expectedContent.set(
+			baseContent.slice(cut1.ofs + cut1.del),
+			cut1.ofs + cut1.ins.length);
+		const attrs = await getRandom(10);
+
+		{ // do layout change, and write in big a chunk
+			const { byteSink, completion } = await makeSink(baseSrc, initAttrs.length);
+
+			// layout change
+			await byteSink.spliceLayout(cut1.ofs, cut1.del, cut1.ins.length);
+
+			await byteSink.setAttrSectionSize(attrs.length);
+
+			// write out new bytes
+			await byteSink.write(cut1.ofs, cut1.ins);
+			await byteSink.writeAttrs(attrs);
+			await byteSink.done();
+
+			await compareContentAndAttrs(key, zerothNonce, version, completion, expectedContent, attrs);
 		}
 	});
 

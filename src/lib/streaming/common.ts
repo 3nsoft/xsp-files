@@ -27,6 +27,11 @@ export interface ByteSource {
 	getPosition(): Promise<number>;
 }
 
+export interface ByteSourceWithAttrs extends ByteSource {
+	readAttrs(): Promise<Uint8Array>;
+	getAttrsSize(): Promise<number>;
+}
+
 /**
  * This interface is a copy of web3n.streaming.LayoutNewSection.
  */
@@ -65,6 +70,11 @@ export interface ByteSink {
 	freezeLayout(): Promise<void>;
 	write(pos: number, bytes: Uint8Array): Promise<void>;
 	done(err?: any): Promise<void>;
+}
+
+export interface ByteSinkWithAttrs extends ByteSink {
+	setAttrSectionSize(size: number): Promise<void>;
+	writeAttrs(bytes: Uint8Array): Promise<void>;
 }
 
 /**

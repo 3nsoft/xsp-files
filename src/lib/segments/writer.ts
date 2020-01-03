@@ -1,5 +1,5 @@
 /*
- Copyright(c) 2015 - 2018 3NSoft Inc.
+ Copyright(c) 2015 - 2019 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -21,7 +21,7 @@ import { AsyncSBoxCryptor, calculateNonce, KEY_LENGTH, NONCE_LENGTH }
 	from '../utils/crypt-utils';
 import { ObjSource, Layout } from '../streaming/common';
 import { assert } from '../utils/assert';
-import { PackingInfo } from './packing-info';
+import { PackingInfo, NewPackInfo } from './packing-info';
 
 export interface SegmentsWriter {
 
@@ -80,6 +80,8 @@ export interface SegmentsWriter {
 
 	unpackedReencryptChainSegs(): NewSegmentInfo[];
 
+	formatVersion: number;
+
 }
 
 export interface BaseSegmentInfo extends SegmentInfo {
@@ -109,13 +111,14 @@ export type RNG = (n: number) => Promise<Uint8Array>;
  * @param rng
  * @param cryptor
  */
-export async function makeSegmentsWriter(key: Uint8Array,
-		zerothHeaderNonce: Uint8Array, version: number,
-		opt: SegmentWriterMakeOpt,
-		rng: RNG, cryptor: AsyncSBoxCryptor): Promise<SegmentsWriter> {
+export async function makeSegmentsWriter(
+	key: Uint8Array, zerothHeaderNonce: Uint8Array, version: number,
+	opt: SegmentWriterMakeOpt, rng: RNG, cryptor: AsyncSBoxCryptor
+): Promise<SegmentsWriter> {
 	if (opt.type === 'new') {
+		const format = (opt.formatWithSections ? 2 : 1);
 		return await SegWriter.makeFresh(
-			key, zerothHeaderNonce, opt.segSize, version, rng, cryptor);
+			key, zerothHeaderNonce, opt.segSize, format, version, rng, cryptor);
 	} else if (opt.type === 'restart') {
 		return await SegWriter.makeRestarted(
 			key, zerothHeaderNonce, opt.header, version, rng, cryptor);
@@ -127,8 +130,9 @@ export async function makeSegmentsWriter(key: Uint8Array,
 	}
 }
 
-export type SegmentWriterMakeOpt = { type: 'new'; segSize: number; } |
-	{ type: 'update'; base: ObjSource; } |
+export type SegmentWriterMakeOpt =
+	{ type: 'new'; segSize: number; formatWithSections?: boolean; } |
+	{ type: 'update'; base: ObjSource; formatWithSections?: boolean; } |
 	{ type: 'restart'; header: Uint8Array; };
 
 class SegWriter {
@@ -153,8 +157,9 @@ class SegWriter {
 	 * @param cryptor
 	 * @param base
 	 */
-	private constructor(key: Uint8Array, zerothNonce: Uint8Array,
-		segsOrSegSize: SegsInfo|number,
+	private constructor(
+		key: Uint8Array, zerothNonce: Uint8Array,
+		baseSegs: SegsInfo|undefined, newPackInfo: NewPackInfo|undefined,
 		public version: number,
 		private randomBytes: RNG,
 		private cryptor: AsyncSBoxCryptor,
@@ -164,15 +169,16 @@ class SegWriter {
 				"Given key has wrong size."); }
 		this.key = new Uint8Array(key);
 		if (this.base) {
-			if (typeof segsOrSegSize !== 'object') { throw new Error(
-				`Base segments should be given`); }
+			if (!baseSegs) { throw new Error(`Base segments should be given`); }
 			this.packing = PackingInfo.make(
-				segsOrSegSize, this.randomBytes, this.base.version);
-		} else if (typeof segsOrSegSize === 'number') {
-			this.packing = PackingInfo.make(segsOrSegSize, this.randomBytes);
+				baseSegs, undefined, this.randomBytes, this.base.version);
+		} else if (newPackInfo) {
+			this.packing = PackingInfo.make(
+				undefined, newPackInfo, this.randomBytes);
+		} else if (baseSegs) {
+			this.packing = PackingInfo.restartWithAllNewFrozenLayout(baseSegs);
 		} else {
-			this.packing = PackingInfo.restartWithAllNewFrozenLayout(
-				segsOrSegSize);
+			throw new Error(``);
 		}
 		if (!Number.isInteger(this.version) || (this.version < 0)) {
 			throw new Error(`Given version is not a non-negative integer`); }
@@ -184,36 +190,46 @@ class SegWriter {
 		Object.seal(this);
 	}
 
-	static async makeFresh(key: Uint8Array, zerothNonce: Uint8Array,
-			segSizein256bs: number, version: number, randomBytes: RNG,
-			cryptor: AsyncSBoxCryptor): Promise<SegmentsWriter> {
+	static async makeFresh(
+		key: Uint8Array, zerothNonce: Uint8Array,
+		segSizein256bs: number, formatVersion: number,
+		version: number, randomBytes: RNG, cryptor: AsyncSBoxCryptor
+	): Promise<SegmentsWriter> {
 		if ((segSizein256bs < 1) || (segSizein256bs > 0xffff)) {
 			throw new Error("Given segment size is illegal.");
 		}
+		const newPackInfo: NewPackInfo = {
+			formatVersion,
+			segSize: segSizein256bs << 8
+		};
 		const segWriter = new SegWriter(
-			key, zerothNonce, segSizein256bs << 8, version, randomBytes, cryptor);
+			key, zerothNonce, undefined, newPackInfo,
+			version, randomBytes, cryptor);
 		await segWriter.packing.addChain();
 		return segWriter.wrap();
 	}
 
-	static async makeRestarted(key: Uint8Array, zerothNonce: Uint8Array,
-			header: Uint8Array, version: number, randomBytes: RNG,
-			cryptor: AsyncSBoxCryptor): Promise<SegmentsWriter> {
+	static async makeRestarted(
+		key: Uint8Array, zerothNonce: Uint8Array, header: Uint8Array,
+		version: number, randomBytes: RNG, cryptor: AsyncSBoxCryptor
+	): Promise<SegmentsWriter> {
 		const headerContent = await cryptor.formatWN.open(header, key);
 		const segs = readSegsInfoFromHeader(headerContent);
 		const segWriter = new SegWriter(
-			key, zerothNonce, segs, version, randomBytes, cryptor);
+			key, zerothNonce, segs, undefined, version, randomBytes, cryptor);
 		return segWriter.wrap();
 	}
 
-	static async makeUpdated(key: Uint8Array, zerothNonce: Uint8Array,
-			base: ObjSource, version: number, randomBytes: RNG,
-			cryptor: AsyncSBoxCryptor): Promise<SegmentsWriter> {
+	static async makeUpdated(
+		key: Uint8Array, zerothNonce: Uint8Array, base: ObjSource,
+		version: number, randomBytes: RNG, cryptor: AsyncSBoxCryptor
+	): Promise<SegmentsWriter> {
 		const baseHeader = await base.readHeader();
 		const headerContent = await cryptor.formatWN.open(baseHeader, key);
 		const segs = readSegsInfoFromHeader(headerContent);
 		const segWriter = new SegWriter(
-			key, zerothNonce, segs, version, randomBytes, cryptor, base);
+			key, zerothNonce, segs, undefined,
+			version, randomBytes, cryptor, base);
 		if (segWriter.packing.index.totalSegsLen === undefined) {
 			const baseSegsLen = await base.segSrc.getSize();
 			if (baseSegsLen === undefined) { throw new Error(
@@ -223,8 +239,9 @@ class SegWriter {
 		return segWriter.wrap();
 	}
 	
-	private async packSeg(content: Uint8Array, segId: SegId):
-			Promise<Uint8Array> {
+	private async packSeg(
+		content: Uint8Array, segId: SegId
+	): Promise<Uint8Array> {
 		const segInfo = this.packing.index.segmentInfo(
 			segId, this.packing.segInfoExtender);
 		if (!segInfo) { throw writeExc('unknownSeg'); }
@@ -316,7 +333,8 @@ class SegWriter {
 			showContentLayout: () => packing.showLayout(),
 			showPackedLayout: () => packing.showPackedLayout(),
 			setContentLength: len => packing.setContentLength(len),
-			hasBase: !!this.base
+			hasBase: !!this.base,
+			formatVersion: this.packing.formatVersion
 		};
 		Object.freeze(wrap);
 		return wrap;
@@ -350,7 +368,9 @@ export interface BaseBytesInfo {
 export type WriteExcFlag = 'segsPacked' | 'headerPacked' | 'unknownSeg' |
 	'argsOutOfBounds';
 
-export function writeExc(flag: WriteExcFlag, msg?: string, cause?: any): Exception {
+export function writeExc(
+	flag: WriteExcFlag, msg?: string, cause?: any
+): Exception {
 	const e = makeBaseException(msg, cause);
 	e[flag] = true;
 	return e;

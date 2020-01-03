@@ -1,5 +1,5 @@
 /*
- Copyright(c) 2015 - 2018 3NSoft Inc.
+ Copyright(c) 2015 - 2019 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -38,6 +38,8 @@ export interface SegsInfo {
 	 */
 	segChains: SegsChainInfo[];
 
+	formatVersion: number;
+
 }
 
 export interface AttrSegInfo {
@@ -60,16 +62,21 @@ export interface EndlessSegsChainInfo {
 export type SegsChainInfo = FiniteSegsChainInfo|EndlessSegsChainInfo;
 
 export function headerContentFor(s: SegsInfo): Uint8Array {
-	return assembleV1HeaderContent(s);
+	if ((s.formatVersion === 1)
+	|| (s.formatVersion === 2)) {
+		return assembleV1andV2HeaderContent(s);
+	} else {
+		throw new Error(`Version ${s.formatVersion} is not known`);
+	}
 }
 
-function assembleV1HeaderContent(s: SegsInfo): Uint8Array {
+function assembleV1andV2HeaderContent(s: SegsInfo): Uint8Array {
 	const headerLen = 1 + 2 + (3 + 4 + NONCE_LENGTH)*s.segChains.length;
 	const h = new Uint8Array(headerLen);
 	let pos = 0;
 	
 	// 1) version byte
-	h[pos] = 1;
+	h[pos] = s.formatVersion;
 	pos += 1;
 
 	// 3) segment size in 256 byte units
@@ -145,7 +152,7 @@ function storeUintIn3Bytes(x: Uint8Array, i: number, u: number): void {
  * @return unsigned 32-bit integer (4 bytes), stored big-endian way in x,
  * starting at index i.
  */
-function loadUintFrom4Bytes(x: Uint8Array, i: number): number {
+export function loadUintFrom4Bytes(x: Uint8Array, i: number): number {
 	// Note that (x << 24) may produce negative number, probably due to
 	// treating intermediate integer as signed, and pulling sign to resulting
 	// float number. Hence, we need a bit different operation here.
@@ -158,7 +165,7 @@ function loadUintFrom4Bytes(x: Uint8Array, i: number): number {
  * @param u is an unsigned 32-bit integer (4 bytes) to be stored big-endian
  * way in x, starting at index i.
  */
-function storeUintIn4Bytes(x: Uint8Array, i: number, u: number): void {
+export function storeUintIn4Bytes(x: Uint8Array, i: number, u: number): void {
 	x[i] = u >>> 24;
 	x[i+1] = u >>> 16;
 	x[i+2] = u >>> 8;
@@ -166,7 +173,13 @@ function storeUintIn4Bytes(x: Uint8Array, i: number, u: number): void {
 }
 
 export function readSegsInfoFromHeader(h: Uint8Array): SegsInfo {
-	return readV1Header(h);
+	if (h.length < 1) { throw inputException(``); }
+	const v = h[0];
+	if ((v === 1) || (v === 2)) {
+		return readV1orV2Header(h);
+	} else {
+		throw inputException(`Given header version ${v} is not supported`);
+	}
 }
 
 export interface Exception {
@@ -183,8 +196,9 @@ export function makeBaseException(msg?: string, cause?: any): Exception {
 export type ExceptionFlag = 'inputParsing' | 'argsOutOfBounds' | 'unknownSeg' |
 	'concurrentIteration';
 
-export function exception(flag: ExceptionFlag, msg?: string, cause?: any):
-		Exception {
+export function exception(
+	flag: ExceptionFlag, msg?: string, cause?: any
+): Exception {
 	const e = makeBaseException(msg, cause);
 	e[flag] = true;
 	return e;
@@ -194,13 +208,14 @@ export function inputException(msg?: string, cause?: any): Exception {
 	return exception('inputParsing', msg, cause);
 }
 
-function readV1Header(h: Uint8Array): SegsInfo {
-	if (!isV1HeaderLength(h.length)) { throw inputException(
+function readV1orV2Header(h: Uint8Array): SegsInfo {
+	if (!isV1andV2HeaderLength(h.length)) { throw inputException(
 		`Header content size ${h.length} doesn't correspond to version 1.`); }
 
 	// 1) check version byte
-	if (h[0] !== 1) { throw inputException(
-		`Given header version is ${h[0]} instead of 1`); }
+	const formatVersion = h[0];
+	if ((formatVersion !== 1) && (formatVersion !== 2)) { throw inputException(
+		`Given header version is ${formatVersion} instead of 1 or 2`); }
 	let pos = 1;
 
 	// 3) segment size in 256 byte units
@@ -231,10 +246,10 @@ function readV1Header(h: Uint8Array): SegsInfo {
 		segChains.push(chainInfo);
 	}
 
-	return { segChains, segSize };
+	return { segChains, segSize, formatVersion };
 }
 
-function isV1HeaderLength(len: number): boolean {
+function isV1andV2HeaderLength(len: number): boolean {
 	len -= (1 + 2);
 	if (len < 0) { return false; }
 	if ((len % 31) === 0) { return true; }
@@ -391,8 +406,9 @@ export class Locations {
 		return { chain, seg, posInSeg };
 	}
 
-	getChainLocations(indOrChain: number|SegsChainInfo):
-			ChainLocations|undefined {
+	getChainLocations(
+		indOrChain: number|SegsChainInfo
+	): ChainLocations|undefined {
 		if (typeof indOrChain === 'number') {
 			return this.locations[indOrChain];
 		} else {
@@ -400,8 +416,9 @@ export class Locations {
 		}
 	}
 
-	segmentInfo<T extends SegmentInfo>(segId: SegId,
-			infoExtender?: InfoExtender<T>): T {
+	segmentInfo<T extends SegmentInfo>(
+		segId: SegId, infoExtender?: InfoExtender<T>
+	): T {
 		const l = this.locations[segId.chain];
 		if (!l) { throw exception('argsOutOfBounds',
 			`Chain ${segId.chain} is not found`); }
@@ -409,8 +426,9 @@ export class Locations {
 			segId.chain, segId.seg, l, this.segs.segSize, infoExtender);
 	}
 
-	segmentInfos<T extends SegmentInfo>(fstSeg?: SegId,
-			infoExtender?: InfoExtender<T>): IterableIterator<T> {
+	segmentInfos<T extends SegmentInfo>(
+		fstSeg?: SegId, infoExtender?: InfoExtender<T>
+	): IterableIterator<T> {
 		return segmentInfos(
 			this.locations, this.segs.segSize, this.variant, fstSeg, infoExtender);
 	}
@@ -437,8 +455,10 @@ export const MAX_SEG_INDEX = 0xffffffff;
 export type InfoExtender<T extends SegmentInfo> =
 	(chain: SegsChainInfo, segInd: number, info: T) => T;
 
-function segmentInfo<T extends SegmentInfo>(chain: number, seg: number,
-		l: ChainLocations, segSize: number, infoExtender?: InfoExtender<T>): T {
+function segmentInfo<T extends SegmentInfo>(
+	chain: number, seg: number, l: ChainLocations, segSize: number,
+	infoExtender?: InfoExtender<T>
+): T {
 	if (seg < 0) { throw exception('argsOutOfBounds',
 		`Invalid segment index ${seg}`); }
 	const contentOfs = l.content.start + seg*segSize;
@@ -460,9 +480,9 @@ function segmentInfo<T extends SegmentInfo>(chain: number, seg: number,
 	return (infoExtender ? infoExtender(l.chain, seg, s as T): (s as T));
 }
 
-function* segmentInfos<T extends SegmentInfo>(locations: ChainLocations[],
-		segSize: number, variant: { num: number; }, fstSeg?: SegId,
-		infoExtender?: InfoExtender<T>): IterableIterator<T> {
+function* segmentInfos<T extends SegmentInfo>(
+	locations: ChainLocations[], segSize: number, variant: { num: number; }, fstSeg?: SegId, infoExtender?: InfoExtender<T>
+): IterableIterator<T> {
 	const initVariant = variant.num;
 	let fstChainInd = 0;
 	let fstSegInd = 0;
@@ -471,7 +491,8 @@ function* segmentInfos<T extends SegmentInfo>(locations: ChainLocations[],
 		fstSegInd = fstSeg.seg;
 	}
 	for (let chain=fstChainInd; chain<locations.length; chain+=1) {
-		if (initVariant !== variant.num) { throw exception('concurrentIteration',
+		if (initVariant !== variant.num) { throw exception(
+			'concurrentIteration',
 			`Can't iterate cause underlying index has changed.`); }
 		const l = locations[chain];
 		const segIndexLimit = (l.chain.isEndless ?
@@ -484,7 +505,7 @@ function* segmentInfos<T extends SegmentInfo>(locations: ChainLocations[],
 		}
 		fstSegInd = 0;
 		if (l.chain.isEndless) { throw new Error(
-			`Generator in endless chain is not suuposed to be run till its done, and it has already run all allowed segment index values.`); }
+			`Generator in endless chain is not supposed to be run till its done, and it has already run all allowed segment index values.`); }
 	}
 }
 

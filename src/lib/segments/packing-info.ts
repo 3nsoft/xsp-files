@@ -41,6 +41,11 @@ interface WritableSegsInfo extends SegsInfo {
 	segChains: WritableSegsChainInfo[];
 }
 
+export interface NewPackInfo {
+	segSize: number;
+	formatVersion: number;
+}
+
 /**
  * This is a packing tracking logic and structures, used in segements' writer.
  */
@@ -56,18 +61,20 @@ export class PackingInfo {
 	index: Locations;
 
 	private constructor(
-		baseSegsOrSegSize: SegsInfo|number,
+		baseSegs: SegsInfo|undefined,
+		newPackInfo: NewPackInfo|undefined,
 		private readonly baseVersion: number|undefined,
 		private readonly randomBytes: RNG
 	) {
-		if (typeof baseSegsOrSegSize === 'number') {
+		if (newPackInfo && !baseSegs) {
 			this.segs = {
-				segSize: baseSegsOrSegSize,
+				segSize: newPackInfo.segSize,
 				segChains: [],
+				formatVersion: newPackInfo.formatVersion
 			};
 			this.index = new Locations(this.segs);
-		} else {
-			this.segs = baseSegsOrSegSize as any;
+		} else if (baseSegs && !newPackInfo) {
+			this.segs = baseSegs as WritableSegsInfo;
 			this.index = new Locations(this.segs);
 			for (let i=0; i<this.segs.segChains.length; i+=1) {
 				const chain = this.segs.segChains[i] as BaseSegsChainInfo;
@@ -78,17 +85,26 @@ export class PackingInfo {
 				chain.baseOfs = l.packed.start;
 				chain.baseContentOfs = l.content.start;
 			}
+		} else {
+			throw new Error(``);
 		}
 		Object.seal(this);
 	}
 
-	static make(baseSegsOrSegSize: SegsInfo|number, randomBytes: RNG,
-			baseVer?: number): PackingInfo {
-		return new PackingInfo(baseSegsOrSegSize, baseVer, randomBytes);
+	static make(
+		baseSegs: SegsInfo|undefined, newPackInfo: NewPackInfo|undefined,
+		randomBytes: RNG, baseVer?: number
+	): PackingInfo {
+		return new PackingInfo(baseSegs, newPackInfo, baseVer, randomBytes);
 	}
 
 	static restartWithAllNewFrozenLayout(segs: SegsInfo): PackingInfo {
-		const pInfo = new PackingInfo(segs.segSize, undefined, undefined as any);
+		const newPackInfo: NewPackInfo = {
+			segSize: segs.segSize,
+			formatVersion: segs.formatVersion
+		};
+		const pInfo = new PackingInfo(
+			undefined, newPackInfo, undefined, undefined as any);
 		pInfo.initWithAllNewFrozenLayout(segs);
 		return pInfo;
 	}
@@ -97,6 +113,7 @@ export class PackingInfo {
 		this.segs = {
 			segSize: segs.segSize,
 			segChains: segs.segChains as any,
+			formatVersion: segs.formatVersion
 		};
 		this.index = new Locations(this.segs);
 		for (let i=0; i<this.segs.segChains.length; i+=1) {
@@ -105,6 +122,10 @@ export class PackingInfo {
 			chain.newSegs = new NewSegments(chain)
 		}
 		this.headerPacked = true;
+	}
+
+	get formatVersion(): number {
+		return this.segs.formatVersion;
 	}
 
 	showLayout(): Layout {
@@ -128,14 +149,16 @@ export class PackingInfo {
 					prevSec = baseSec;
 				}
 			} else if (chain.type === 'new') {
+				let headBytes = 0;
 				if (chain.headBytes) {
 					const headBytesSec: LayoutBaseSection = {
 						src: 'base',
-						ofs: l.content.start - chain.headBytes.len,
+						ofs: l.content.start,
 						len: chain.headBytes.len,
 						baseOfs:
 							chain.headBytes.baseSeg.contentOfs + chain.headBytes.ofs
 					};
+					headBytes = headBytesSec.len;
 					if (prevSec && (prevSec.src === 'base')
 					&& ((prevSec.baseOfs+prevSec.len) === headBytesSec.baseOfs)) {
 						prevSec.len += headBytesSec.len;
@@ -147,11 +170,13 @@ export class PackingInfo {
 
 				const newSec: LayoutNewSection = {
 					src: 'new',
-					ofs: l.content.start,
+					ofs: l.content.start + headBytes,
 					len: ((l.content.end === undefined) ?
-						undefined : l.content.end - l.content.start)
+						undefined : l.content.end - l.content.start - headBytes)
 				};
-				if (prevSec && (prevSec.src === 'new')) {
+				if ((newSec.len !== undefined) && (newSec.len < 1)) {
+					// do nothing
+				} else if (prevSec && (prevSec.src === 'new')) {
 					prevSec.len = ((newSec.len === undefined) ?
 						undefined : (prevSec.len! + newSec.len));
 				} else {
@@ -243,8 +268,9 @@ export class PackingInfo {
 			`Geometry of segments can't be changed cause header has already been packed.`);
 	}
 
-	turnEndlessToFinite(packedSegsLen: number|undefined,
-			lastSegId?: SegId, lastSegLen?: number): void {
+	turnEndlessToFinite(
+		packedSegsLen: number|undefined, lastSegId?: SegId, lastSegLen?: number
+	): void {
 		this.ensureGeomNotLocked();
 
 		const lastInd = this.segs.segChains.length - 1;
@@ -358,21 +384,24 @@ export class PackingInfo {
 		return cInd;
 	}
 
-	private async cutChainHead(c: WritableSegsChainInfo, seg: number,
-			posInSeg: number): Promise<NewSegsChainInfo|undefined> {
+	private async cutChainHead(
+		c: WritableSegsChainInfo, seg: number, posInSeg: number
+	): Promise<NewSegsChainInfo|undefined> {
 		if ((seg === 0) && (posInSeg === 0)) { return; }
 
 		if (c.type === 'new') {
 			if (!c.newSegs.noSegsPacked) { throw writeExc(
 				'segsPacked', `Can't cut head of a new segment chain`); }
-			// cutting of endless chain doesn't change its size, and
-			// a head cut can be turned into tail cut
+			cutStartOfHeadBaseBytesIn(c, seg, posInSeg);
+			// New chain is allowed to be cut only while nothing was written to it.
+			// Therefore, cutting chain's head is equivalent to cutting tail, and
+			// cutting endless chain is a noop.
 			if (!c.isEndless) {
 				const newChainLen = (c.numOfSegs - 1)*this.segs.segSize +
 					c.lastSegSize - seg*this.segs.segSize - posInSeg;
-				const rightSeg = Math.floor(newChainLen/this.segs.segSize);
-				const rightPos = newChainLen - rightSeg*this.segs.segSize;
-				await this.cutChainTail(c, rightSeg, rightPos);
+				const endSeg = Math.floor(newChainLen/this.segs.segSize);
+				const endPosInSeg = newChainLen - endSeg*this.segs.segSize;
+				await this.cutChainTail(c, endSeg, endPosInSeg);
 			}
 			return;
 		}
@@ -389,23 +418,35 @@ export class PackingInfo {
 			undefined);
 	}
 
-	private async cutChainMiddle(c: WritableSegsChainInfo, leftSeg: number,
-			leftPos: number, rightSeg: number, rightPos: number): Promise<{
-				left: WritableSegsChainInfo; right: WritableSegsChainInfo; }> {
+	private async cutChainMiddle(
+		c: WritableSegsChainInfo, leftSeg: number, leftPos: number,
+		rightSeg: number, rightPos: number
+	): Promise<{ left: WritableSegsChainInfo; right: WritableSegsChainInfo; }> {
 		if (c.type === 'new') {
-			// instead of actually cut the middle, we do check that ensures no
-			// writes done in a cut section and to the right of it, and we
 			if (!c.newSegs.canCutTail(leftSeg, false)) { throw writeExc(
 				'segsPacked', `Can't cut middle of a new segment chain`); }
-			if (c.headBytes && (leftSeg === 0) && (leftPos < c.headBytes.len)) {
-				c.headBytes.len = leftPos;
+			let left = await cutMiddleOfHeadBaseBytesIn(
+				c, leftSeg, leftPos, rightSeg, rightPos);
+			if (left) {
+				return { left, right: c };
 			}
-			if (!c.isEndless
-			&& ((leftSeg !== rightSeg) || (leftPos !== rightPos))) {
-				// XXX calculate proper cut position as tot_len - middle_len
-				await this.cutChainTail(c, rightSeg, rightPos);
+			if ((leftSeg === rightSeg) && (leftPos === rightPos)) {
+				return { left: c, right: c };
 			}
-			const left = c;
+			// In new chain cut is allowed to be located only to the right of newly
+			// written bytes. Therefore, cutting chain's middle is equivalent to
+			// cutting tail, and cutting endless chain is a noop.
+			if (!c.isEndless) {
+				const totLen =
+					(c.numOfSegs - 1)*this.segs.segSize + c.lastSegSize;
+				const midLen =
+					(rightSeg - leftSeg)*this.segs.segSize + rightPos - leftPos;
+				const newChainLen = totLen - midLen;
+				const endSeg = Math.floor(newChainLen/this.segs.segSize);
+				const endPosInSeg = newChainLen - endSeg*this.segs.segSize;
+				await this.cutChainTail(c, endSeg, endPosInSeg);
+			}
+			left = c;
 			const right = left;
 			return { left, right };
 		}
@@ -420,8 +461,9 @@ export class PackingInfo {
 		return { left, right };
 	}
 
-	private async cutChainTail(c: WritableSegsChainInfo, endSeg: number,
-			endPosInSeg: number): Promise<NewSegsChainInfo|undefined> {
+	private async cutChainTail(
+		c: WritableSegsChainInfo, endSeg: number, endPosInSeg: number
+	): Promise<NewSegsChainInfo|undefined> {
 		const cutSeg = (endPosInSeg !== 0);
 		const numOfSegs = endSeg + (cutSeg ? 1 : 0);
 
@@ -430,11 +472,7 @@ export class PackingInfo {
 				endSeg -= 1;
 			}
 			c.newSegs.cutTail(endSeg, cutSeg);
-			if ((endSeg === 0) && c.headBytes) {
-				if (endPosInSeg <= c.headBytes.len) {
-					c.headBytes.len = endPosInSeg;
-				}
-			}
+			cutTailOfHeadBaseBytesIn(c, endSeg, endPosInSeg);
 			if (c.isEndless) {
 				delete c.isEndless;
 			}
@@ -452,9 +490,9 @@ export class PackingInfo {
 			undefined);
 	}
 
-	private async cutEdgeSegmentOf(c: BaseSegsChainInfo,
-			posInSeg: number, atHead: boolean):
-			Promise<NewSegsChainInfo|undefined> {
+	private async cutEdgeSegmentOf(
+		c: BaseSegsChainInfo, posInSeg: number, atHead: boolean
+	): Promise<NewSegsChainInfo|undefined> {
 		if (c.numOfSegs === 1) {
 			const headBytes: BaseBytesInfo = {
 				baseSeg: {
@@ -550,8 +588,9 @@ export class PackingInfo {
 		return chain.headBytes;
 	}
 
-	async addChain(contentLen?: number, chainInd?: number, updateIndex = true):
-			Promise<void> {
+	async addChain(
+		contentLen?: number, chainInd?: number, updateIndex = true
+	): Promise<void> {
 		this.ensureGeomNotLocked();
 		
 		if (chainInd === undefined) {
@@ -608,8 +647,9 @@ export class PackingInfo {
 		}
 	}
 
-	private growChainTail(c: NewSegsChainInfo, delta: number,
-			updateIndex = true): void {
+	private growChainTail(
+		c: NewSegsChainInfo, delta: number, updateIndex = true
+	): void {
 		if (c.isEndless) { throw new Error(
 			`This method should be called for finite segment chains`); }
 		const newContentInChain =
@@ -675,8 +715,9 @@ export class PackingInfo {
 		this.index.update();
 	}
 
-	private async cutForInsert(pos: number, rem: number):
-			Promise<{ left?: WritableSegsChainInfo;
+	private async cutForInsert(
+		pos: number, rem: number
+	): Promise<{ left?: WritableSegsChainInfo;
 				right: WritableSegsChainInfo; }> {
 		const leftCut = this.index.locateContentOfs(pos);
 		const leftCutIsBetweenChains =
@@ -798,8 +839,9 @@ function ensureCanDropChain(c: WritableSegsChainInfo): WritableSegsChainInfo {
 	return c;
 }
 
-function ensureCanCutTailOf(c: WritableSegsChainInfo, lastSeg: number,
-		lastSegPartial: boolean): void {
+function ensureCanCutTailOf(
+	c: WritableSegsChainInfo, lastSeg: number, lastSegPartial: boolean
+): void {
 	if (c.type === 'new') {
 		if (!c.newSegs.canCutTail(lastSeg, lastSegPartial)) { throw writeExc(
 			'segsPacked', `Can't cut tail of a new segment chain`); }
@@ -813,8 +855,61 @@ function ensureCanCutHeadOf(c: WritableSegsChainInfo): void {
 	}
 }
 
-function chainSizeForContent(contentLen: number, segSize: number):
-		{ numOfSegs: number; lastSegSize: number; } {
+function cutStartOfHeadBaseBytesIn(
+	c: NewSegsChainInfo, cutSeg: number, posInCutSeg: number
+): void {
+	if (!c.headBytes) { return; }
+	if ((cutSeg === 0) && (posInCutSeg < c.headBytes.len)) {
+		c.headBytes.ofs += posInCutSeg;
+		c.headBytes.len -= posInCutSeg;
+	} else {
+		c.headBytes = undefined;
+	}
+}
+
+async function cutMiddleOfHeadBaseBytesIn(
+	c: NewSegsChainInfo, leftSeg: number, leftPos: number,
+	rightSeg: number, rightPos: number
+): Promise<WritableSegsChainInfo|undefined> {
+	if (!c.headBytes) { return; }
+	if ((leftSeg > 0) || (leftPos > c.headBytes.len)) { return; }
+	if ((rightSeg > 0) || (rightPos < c.headBytes.len)) {
+		// left part with base header bytes separates into its own chain
+		const headBytes: BaseBytesInfo = {
+			baseSeg: c.headBytes.baseSeg,
+			ofs: c.headBytes.ofs,
+			len: leftPos
+		};
+		c.headBytes.ofs += rightPos;
+		c.headBytes.len -= rightPos;
+		const left: WritableSegsChainInfo = {
+			nonce: await this.randomBytes(NONCE_LENGTH),
+			numOfSegs: 1,
+			lastSegSize: headBytes.len,
+			type: 'new',
+			newSegs: undefined as any,
+			headBytes
+		};
+		return left;
+	} else {
+		c.headBytes.len = leftPos;
+	}
+}
+
+function cutTailOfHeadBaseBytesIn(
+	c: NewSegsChainInfo, endSeg: number, endPosInSeg: number
+): void {
+	if (!c.headBytes) { return; }
+	if ((endSeg === 0) && c.headBytes) {
+		if (endPosInSeg <= c.headBytes.len) {
+			c.headBytes.len = endPosInSeg;
+		}
+	}
+}
+
+function chainSizeForContent(
+	contentLen: number, segSize: number
+): { numOfSegs: number; lastSegSize: number; } {
 	const numOfCompleteSegs = Math.floor(contentLen/segSize);
 	const leftOvers = contentLen - numOfCompleteSegs*segSize;
 	return {

@@ -1,5 +1,5 @@
 /*
- Copyright(c) 2015 - 2018 3NSoft Inc.
+ Copyright(c) 2015 - 2019 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -57,12 +57,15 @@ export interface SegmentsReader {
 	 */
 	destroy(): void;
 
+	formatVersion: number;
+
 }
 
 export type ValidationExcFlag = 'versionMismatch' | 'nonceMismatch';
 
-function exception(flag: ValidationExcFlag, msg?: string, cause?: any):
-		Exception {
+function exception(
+	flag: ValidationExcFlag, msg?: string, cause?: any
+): Exception {
 	const e = makeBaseException(msg, cause);
 	e[flag] = true;
 	return e;
@@ -79,9 +82,10 @@ function exception(flag: ValidationExcFlag, msg?: string, cause?: any):
  * initialized.
  * @param cryptor 
  */
-export async function makeSegmentsReader(key: Uint8Array,
-		zerothHeaderNonce: Uint8Array|undefined, version: number,
-		header: Uint8Array, cryptor: AsyncSBoxCryptor): Promise<SegmentsReader> {
+export async function makeSegmentsReader(
+	key: Uint8Array, zerothHeaderNonce: Uint8Array|undefined, version: number,
+	header: Uint8Array, cryptor: AsyncSBoxCryptor
+): Promise<SegmentsReader> {
 	if (zerothHeaderNonce) {
 		const headerNonce = header.subarray(0, NONCE_LENGTH);
 		const delta = findNonceDelta(zerothHeaderNonce, headerNonce);
@@ -113,15 +117,18 @@ class SegReader {
 		Object.seal(this);
 	}
 
-	static async makeFor(key: Uint8Array, version: number,
-		header: Uint8Array, cryptor: AsyncSBoxCryptor): Promise<SegmentsReader> {
+	static async makeFor(
+		key: Uint8Array, version: number, header: Uint8Array,
+		cryptor: AsyncSBoxCryptor
+	): Promise<SegmentsReader> {
 		const headerContent = await cryptor.formatWN.open(header, key);
 		const segs = readSegsInfoFromHeader(headerContent);
 		return (new SegReader(key, segs, version, cryptor)).wrap();
 	}
 
-	private async openSeg(segId: SegId, segBytes: Uint8Array):
-			Promise<Uint8Array> {
+	private async openSeg(
+		segId: SegId, segBytes: Uint8Array
+	): Promise<Uint8Array> {
 		const nonce = this.index.segmentNonce(segId);
 		const data = await this.cryptor.open(segBytes, nonce, this.key);
 		return data;
@@ -143,7 +150,8 @@ class SegReader {
 			segmentsLength: this.index.totalSegsLen,
 			version: this.version,
 			segmentInfo: s => this.index.segmentInfo(s),
-			segmentInfos: fstSeg => this.index.segmentInfos(fstSeg)
+			segmentInfos: fstSeg => this.index.segmentInfos(fstSeg),
+			formatVersion: this.segs.formatVersion
 		};
 		Object.freeze(wrap);
 		return wrap;

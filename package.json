@@ -1,6 +1,6 @@
 {
   "name": "xsp-files",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "description": "XSP file format for objects encrypted with NaCl (XSalsa+Poly).",
   "main": "./dist/lib/index.js",
   "types": "./dist/lib/index.d.ts",
@@ -13,15 +13,15 @@
     "url": "https://github.com/3nsoft/xsp-files.git"
   },
   "engines": {
-    "node": ">=6.0.0"
+    "node": ">=10.0.0"
   },
   "devDependencies": {
     "@types/jasmine": "^2.5.46",
-    "@types/node": "^8.0.27",
+    "@types/node": "^10.0.0",
     "ecma-nacl": "^2.4.2",
     "jasmine": "^3.1.0",
     "rxjs": "^6.3.3",
-    "typescript": "^3.2.2"
+    "typescript": "^3.7.3"
   },
   "keywords": [
     "encryption",

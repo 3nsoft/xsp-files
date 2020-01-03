@@ -1,5 +1,5 @@
 /*
- Copyright (C) 2015 - 2018 3NSoft Inc.
+ Copyright (C) 2015 - 2019 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -29,8 +29,9 @@ import { assert } from '../utils/assert';
  * used by resultant source over its lifetime.
  * @param objVersion
  */
-export async function makeObjSourceFromArrays(arrs: Uint8Array|Uint8Array[],
-		segWriter: SegmentsWriter): Promise<ObjSource> {
+export async function makeObjSourceFromArrays(
+	arrs: Uint8Array|Uint8Array[], segWriter: SegmentsWriter
+): Promise<ObjSource> {
 	if (!Array.isArray(arrs)) {
 		arrs = [ arrs ];
 	}
@@ -111,8 +112,9 @@ function makeNonSeekableSrcFromArrays(arrs: Uint8Array[]): ByteSource {
 	return src;
 }
 
-function makeNonSeekableObjSrcFromSegs(version: number,
-		header: Uint8Array, segs: Uint8Array[]): ObjSource {
+function makeNonSeekableObjSrcFromSegs(
+	version: number, header: Uint8Array, segs: Uint8Array[]
+): ObjSource {
 	const src: ObjSource = {
 		version,
 		readHeader: async () => header,
@@ -158,8 +160,9 @@ class EncryptingObjSource implements ObjSource, ByteSource {
 		this.segIter = this.segWriter.segmentInfos();
 	}
 
-	static async makeFor(byteSrc: ByteSource, segWriter: SegmentsWriter):
-			Promise<ObjSource> {
+	static async makeFor(
+		byteSrc: ByteSource, segWriter: SegmentsWriter
+	): Promise<ObjSource> {
 		if (segWriter.hasBase) { throw new Error(
 			`This implementation uses new writers, or restarted writers`); }
 		const src = new EncryptingObjSource(byteSrc, segWriter);
@@ -317,7 +320,7 @@ class EncryptingObjSource implements ObjSource, ByteSource {
 			const lastSeg = this.segWriter.locateContentOfs(offset-1);
 			this.segIter = this.segWriter.segmentInfos(lastSeg);
 			({ value: this.seg } = this.segIter.next());
-			this.posInSeg = this.seg.packedLen;
+			this.posInSeg = this.seg!.packedLen;
 			this.bufferedSeg = undefined;
 			return;
 		}
@@ -344,7 +347,7 @@ class EncryptingObjSource implements ObjSource, ByteSource {
 		({ value: this.seg } = this.segIter.next());
 		this.posInSeg = segLoc.posInSeg;
 		this.bufferedSeg = undefined;
-		await this.byteSrc.seek(this.seg.packedOfs);
+		await this.byteSrc.seek(this.seg!.packedOfs);
 	}
 
 	private get position(): number {
@@ -391,8 +394,17 @@ function toOneArray(arrs: Uint8Array[]): Uint8Array {
  * translate into inability for a returned source to read twice at the same
  * offset.
  */
-export function makeEncryptingObjSource(bytes: ByteSource,
-		segWriter: SegmentsWriter): Promise<ObjSource> {
+export function makeEncryptingObjSource(
+	bytes: ByteSource, segWriter: SegmentsWriter
+): Promise<ObjSource> {
+	if (segWriter.formatVersion !== 1) {
+		// Note:
+		// This construct is currently used to encrypt single section objects.
+		// If writer allows more sections, then content bytes should be packed in
+		// a particular way, but typing can't enforce this.
+		// Therefore, in order to curb possible missuse, we the check with throw.
+		throw new Error(`Expecting seg writer of format 1`);
+	}
 	return EncryptingObjSource.makeFor(bytes, segWriter);
 }
 

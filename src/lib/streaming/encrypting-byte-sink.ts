@@ -1,5 +1,5 @@
 /*
- Copyright (C) 2018 3NSoft Inc.
+ Copyright (C) 2018 - 2019 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -14,9 +14,9 @@
  You should have received a copy of the GNU General Public License along with
  this program. If not, see <http://www.gnu.org/licenses/>. */
 
-import { ByteSink, Observer, Layout } from './common';
+import { ByteSink, Observer, Layout, ByteSinkWithAttrs, ByteSourceWithAttrs } from './common';
 import { SegmentsWriter, writeExc, NewSegmentInfo } from '../segments/writer';
-import { LocationInSegment, SegId } from '../segments/xsp-info';
+import { LocationInSegment, SegId, storeUintIn4Bytes } from '../segments/xsp-info';
 import { assert } from '../utils/assert';
 import { SingleProc, makeSyncedFunc } from '../utils/process-syncing';
 
@@ -40,8 +40,9 @@ class EncryptingByteSink implements ByteSink {
 		Object.seal(this);
 	}
 
-	static async makeFor(segWriter: SegmentsWriter):
-			Promise<{ sink: ByteSink; sub: Subscribe; }> {
+	static makeFor(
+		segWriter: SegmentsWriter
+	): { sink: ByteSink; sub: Subscribe; } {
 		const encWriter = new EncryptingByteSink(segWriter);
 		const syncProc = new SingleProc();
 		const sink: ByteSink = {
@@ -59,8 +60,9 @@ class EncryptingByteSink implements ByteSink {
 		return { sink, sub };
 	}
 
-	private start(obs: Observer<EncrEvent>, backpressure?: () => Promise<void>):
-			(() => void) {
+	private start(
+		obs: Observer<EncrEvent>, backpressure?: () => Promise<void>
+	): (() => void) {
 		if (this.encOutput) { throw new Error(`This sink is already subsribed`); }
 		if (!obs.next || !obs.error || !obs.complete) { throw new Error(
 			`Given output observer must have all methods for use here`); }
@@ -174,8 +176,9 @@ class EncryptingByteSink implements ByteSink {
 		}
 	}
 
-	private async packAndOutSeg(segInfo: NewSegmentInfo, content: Uint8Array):
-			Promise<void> {
+	private async packAndOutSeg(
+		segInfo: NewSegmentInfo, content: Uint8Array
+	): Promise<void> {
 		const seg = await this.segWriter.packSeg(content, segInfo);
 		if (this.backpressure) {
 			await this.backpressure();
@@ -494,8 +497,9 @@ class ChunksBuffer {
 		this.chunks.push(newChunk);
 	}
 
-	extractBytesFrom(chunk: Chunk|number, start: number, end: number):
-			Uint8Array {
+	extractBytesFrom(
+		chunk: Chunk|number, start: number, end: number
+	): Uint8Array {
 		if (!(start < end)) { throw new Error(
 			`Invalid extraction boundaries: start = ${start}, end = ${end}`); }
 
@@ -623,9 +627,164 @@ export type Subscribe =
  * @param obs is an observer of encryption events. This observer must have all
  * of its function-fields.
  */
-export function makeEncryptingByteSink(segsWriter: SegmentsWriter):
-		Promise<{ sink: ByteSink; sub: Subscribe; }> {
+export function makeEncryptingByteSink(
+	segsWriter: SegmentsWriter
+): { sink: ByteSink; sub: Subscribe; } {
+	assert(segsWriter.formatVersion === 1,
+		`Seg writer format is ${segsWriter.formatVersion} instead of 1`);
 	return EncryptingByteSink.makeFor(segsWriter);
+}
+
+class EncryptingByteSinkWithAttrs {
+
+	private attrSize: number|undefined = undefined;
+	private attrSizeSetInThisVersion = false;
+	private contentSize: number|undefined = undefined;
+
+	private constructor(
+		private readonly mainSink: ByteSink
+	) {
+		Object.seal(this);
+	}
+
+	private init(
+		segWriter: SegmentsWriter, baseAttrSize: number|undefined
+	): void {
+		if (!segWriter.hasBase) { return; }
+		if (baseAttrSize === undefined) { throw new Error(
+			`Writer has base, but base attributes size is not given`); }
+		if (!Number.isInteger(baseAttrSize)
+		|| (baseAttrSize < 0)) { throw new Error (
+			`Given invalid base attrs size: ${baseAttrSize}`); }
+		this.attrSize = baseAttrSize;
+		if (segWriter.contentLength !== undefined) {
+			this.contentSize = segWriter.contentLength - 4 - this.attrSize;
+			if (this.contentSize < 0) { throw new Error(
+				`Given base attributes' size implies negative content size`); }
+		}
+	}
+
+	static makeFor(
+		segWriter: SegmentsWriter, baseAttrSize: number|undefined
+	): { sink: ByteSinkWithAttrs; sub: Subscribe; } {
+		const { sink: mainSink, sub } = EncryptingByteSink.makeFor(segWriter);
+		// Note about synchronization:
+		// a) mainSink's methods are synchronized.
+		// b) Methods of this class only change values of input parameters that
+		//    are captured in a possible synchronization wait, but are not
+		//    changed thereafter.
+		// c) Only one JS thread executes at any moment.
+		// Given above points, we can write all methods in this class to perform
+		// all changes in a sync manner before tail-calling mainSink methods.
+		// This will ensure ordered changes to state in wrap and in mainSink.
+		// If few mainSink calls are done, only the first call will be
+		// synchronized relative to other methods.
+		const wrap = new EncryptingByteSinkWithAttrs(mainSink);
+		wrap.init(segWriter, baseAttrSize);
+		const sink: ByteSinkWithAttrs = {
+			getSize: wrap.getSize.bind(wrap),
+			setSize: wrap.setSize.bind(wrap),
+			showLayout: mainSink.showLayout,
+			spliceLayout: wrap.spliceLayout.bind(wrap),
+			freezeLayout: wrap.freezeLayout.bind(wrap),
+			write: wrap.write.bind(wrap),
+			done: wrap.done.bind(wrap),
+			setAttrSectionSize: wrap.setAttrSectionSize.bind(wrap),
+			writeAttrs: wrap.writeAttrs.bind(wrap)
+		};
+		return { sink, sub };
+	}
+
+	async setAttrSectionSize(size: number): Promise<void> {
+		if (!Number.isInteger(size) || (size < 0)) { throw new Error(
+			`Invalid size value ${size}`); }
+		if (this.attrSizeSetInThisVersion) { throw new Error(
+			`Attributes' section size is already set`); }
+		this.attrSizeSetInThisVersion = true;
+		if (this.attrSize === undefined) {
+			this.attrSize = size;
+			if (this.contentSize !== undefined) {
+				await this.mainSink.setSize(4 + this.attrSize + this.contentSize);
+			}
+		} else {
+			const prevAttrSize = this.attrSize;
+			this.attrSize = size;
+			await this.mainSink.spliceLayout(0, 4+prevAttrSize, 4+this.attrSize);
+		}
+		await this.mainSink.write(0, packUintToBytes(this.attrSize));
+	}
+
+	async writeAttrs(bytes: Uint8Array): Promise<void> {
+		if (this.attrSizeSetInThisVersion) {
+			if (this.attrSize !== bytes.length) { throw new Error(
+				`Expected attributes' section size is ${this.attrSize}, but ${bytes.length} bytes given`); }
+		} else {
+			await this.setAttrSectionSize(bytes.length);
+		}
+		await this.mainSink.write(4, bytes);
+	}
+
+	async getSize(): Promise<number | undefined> {
+		return this.contentSize;
+	}
+
+	async setSize(size: number | undefined): Promise<void> {
+		if (size === undefined) {
+			this.contentSize = undefined;
+			return this.mainSink.setSize(undefined);
+		}
+		if (!Number.isInteger(size) || (size < 0)) { throw new Error(
+			`Invalid size value ${size}`); }
+		this.contentSize = size;
+		if (this.attrSize !== undefined) {
+			return this.mainSink.setSize(4 + this.attrSize + this.contentSize);
+		}
+	}
+
+	spliceLayout(pos: number, del: number, ins: number): Promise<void> {
+		if (this.attrSize === undefined) { throw new Error(
+			`Attributes' section size is not set, preventing layout splicing`); }
+		return this.mainSink.spliceLayout(4 + this.attrSize + pos, del, ins);
+	}
+
+	freezeLayout(): Promise<void> {
+		if (this.attrSize === undefined) { throw new Error(
+			`Attributes' section size is not set, preventing layout freeze`); }
+		return this.mainSink.freezeLayout();
+	}
+
+	write(pos: number, bytes: Uint8Array): Promise<void> {
+		if (this.attrSize === undefined) { throw new Error(
+			`Attributes' section size is not set, preventing write of content`); }
+		return this.mainSink.write(4 + this.attrSize + pos, bytes);
+	}
+
+	done(err?: any): Promise<void> {
+		if (err) {
+			return this.mainSink.done(err);
+		} else if (this.attrSize === undefined) {
+			throw new Error(`Attributes' section size is not set, preventing write completion`);
+		} else {
+			return this.mainSink.done();
+		}
+	}
+
+}
+Object.freeze(EncryptingByteSinkWithAttrs.prototype);
+Object.freeze(EncryptingByteSinkWithAttrs);
+
+function packUintToBytes(u: number): Uint8Array {
+	const b = new Uint8Array(4);
+	storeUintIn4Bytes(b, 0, u);
+	return b;
+}
+
+export function makeEncryptingByteSinkWithAttrs(
+	segsWriter: SegmentsWriter, baseAttrSize?: number
+): { sink: ByteSinkWithAttrs; sub: Subscribe; } {
+	assert(segsWriter.formatVersion === 2,
+		`Seg writer format is ${segsWriter.formatVersion} instead of 2`);
+	return EncryptingByteSinkWithAttrs.makeFor(segsWriter, baseAttrSize);
 }
 
 Object.freeze(exports);

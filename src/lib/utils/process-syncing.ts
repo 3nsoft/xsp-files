@@ -97,7 +97,8 @@ Object.freeze(SingleProc.prototype);
 Object.freeze(SingleProc);
 
 export function makeSyncedFunc<T extends Function>(
-		syncProc: SingleProc, thisArg: any, func: T): T {
+	syncProc: SingleProc, thisArg: any, func: T
+): T {
 	return ((...args) => syncProc.startOrChain(() => func.apply(thisArg, args))) as any as T;
 }
 

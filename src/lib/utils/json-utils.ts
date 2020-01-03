@@ -87,8 +87,9 @@ export function deepEqual(a: any, b: any): boolean {
 	return true;
 }
 
-export function* deepFind(a: any, predicate: (val: any) => boolean):
-		IterableIterator<{ pos: string[]; val: any; }> {
+export function* deepFind(
+	a: any, predicate: (val: any) => boolean
+): IterableIterator<{ pos: string[]; val: any; }> {
 	if ((typeof a !== 'object') || !a) {
 		if (predicate(a)) {
 			yield { pos: [], val: a };

@@ -63,8 +63,9 @@ export interface AsyncSBoxCryptor {
  * @param initNonce
  * @param delta
  */
-export function calculateNonce(initNonce: Uint8Array, delta: number|U64):
-		Uint8Array {
+export function calculateNonce(
+	initNonce: Uint8Array, delta: number|U64
+): Uint8Array {
 	let deltaU64: U64;
 	let adding: boolean;
 	if (typeof delta === 'number') {

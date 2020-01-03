@@ -78,7 +78,7 @@ Header provides information about segments, their nonces, and expected sizes. It
     |   version  | | seg size | | seg chains |
     +------------+ +----------+ +------------+
 ```
-* Version byte is a positive integer. Current version is 1.
+* Version byte is a positive integer. Described in this section header layout corresponds to versions 1 and 2.
 * Two big-endian bytes have a non-negative integer with segment content size in 256 byte units. Packed segment size is this plus 16 bytes (for Poly). Last segments in segment chains can be shorter.
 * Info about `n=0,1,...` segment chains.
 
@@ -101,9 +101,25 @@ In a situation when writer has to send file's header before knowing total file l
 Let's note that since nonce for every chain is unique, it is possible to calculated differences between two versions, i.e. what segments of file have changed, and which stayed the same. Segments that stay same guarantee that respective section of file's content stay the same.
 
 
+### Current format versions (storing attributes)
+
+Version 2 is used for content and related attributes' bytes, while version 1 stores no attributes.
+
+Both versions have the same header layout to hide presence of attributes. Version 2 is encrypted like version 1, except that together with n content bytes, k bytes of attributes are encrypted in the following order:
+```
+    |<-    4 bytes    ->| |<-  k bytes  ->| |<- n bytes ->|
+    | num of attr bytes | |  attributes   | |   content   |
+```
+Attributes' length can be up to 4GB in length.
+
+*Note 1*. Format versions 1 and 2 distinguish how content is assembled before encryption. Since packaging is the same, segment level API is the same for these versions. But high level encrypting sink and decrypting source provide APIs with and without attributes.
+
+*Note 2*. We may think about attributes' and content as two sections. Some future format may have more than two sections in object, allowing to have content from different files in the same object without revealing such setup with a different header length. Implementation of such format will need only higher level encrypting sink and decrypting source.
+
+
 ### Object versions
 
-Every object may go through many versions, and it would be nice have both object id and a version imprinted into package.
+Every object may go through many versions, and it would be nice to have both object id and a version imprinted into package.
 Imagine that a client wants to get a particular object and version from a server.
 If server tries to give an incorrect version, it should be noticeable immediately.
 XSP employs the following approach to this.
@@ -120,7 +136,7 @@ But since header only has info about segments structure and segment nonces, such
 When creating a new version, both clients will generate new random nonces for use in segments chains that constitute either whole, or a diff of a new version, ensuring that there is no segment nonce reuse.
 
 
-### API for XSP segments 
+### API for XSP reading and writing
 
 Let's import XSP-related functionality:
 ```javascript
@@ -165,6 +181,28 @@ for (const segInfo of segInfosIter) {
 reader.destroy();
 ```
 
+A stream-like higher level API can be used for reading:
+```javascript
+const src = (reader.formatVersion === 2) ?
+    await makeDecryptedByteSourceWithAttrs(segsByteSrc, segReader) :
+    makeDecryptedByteSource(segsByteSrc, segReader));
+
+// can read bytes at current position
+let bytes = await src.read(100);
+
+// can change current position
+const position = await src.getPosition();
+await src.seek(position + 200);
+
+// read to the end of the source
+bytes = await src.read();
+
+if (reader.formatVersion === 2) {
+    const attrSize = await src.getAttrsSize();
+    const attrBytes = await src.readAttrs();
+}
+```
+
 #### Packing segments
 
 Writer is used for encrypting (packing) segments. For writing all new segments from start to finish, we use option `new`:
@@ -173,8 +211,11 @@ let writer = await makeSegmentsWriter(
     key,    // this is object/file key
     zerothHeaderNonce,   // this is a zeroth nonce, used as id
     version,    // version that will be packed by the writer
-    { type: 'new', segSize: segSizein256bs },   // option to create writer for
-    // all new segments with full size in 256bytes, e.g. 16 equals 4*4*256B, or 4KB size
+    {                            // option to create writer
+        type: 'new',             // all new segments
+        segSize: segSizein256bs, // full seg size in 256bytes, e.g. 16 equals 4*4*256B, or 4KB size
+        formatWithSections: true // optional field, indicates format with attributes
+    },
     randomBytes,    // random numbers, used for segment nonces
     cryptor);   // is an async cryptor, used to encrypt segments and header
 ```
@@ -182,16 +223,39 @@ For writing an updated version, given an object source of a base version, `baseS
 ```javascript
 let writer = await makeSegmentsWriter(
     key, zerothHeaderNonce, version,
-    { type: 'update', base: baseSrc },   // option to create writer for updated
-    // segments. baseSrc is used to reencrypt those base bytes located on
-    // boundaries of base and updated segments
+    {                       // option to create writer
+        type: 'update',     // making a diff, effectively updating existing base segments
+        base: baseSrc       // base source is used to reencrypt base bytes located on
+                            // boundaries of base and updated segments
+    },
     randomBytes, cryptor);
 ```
 
-We may use writer's information and packing functions directly, or we may use a sink with simpler api for streaming:
+We may use writer's information and packing functions directly, or we may use a sink with simpler api for streaming. For format without attributes (`writer.formatVersion === 1`) we do:
 ```javascript
 const { sink, sub } = await xsp.makeEncryptingByteSink(writer);
+```
+For format with attributes (`writer.formatVersion === 2`) we do for new object:
+```javascript
+const { sink, sub } = await xsp.makeEncryptingByteSinkWithAttrs(writer);
+```
+and for writer with base:
+```javascript
+const baseAttrsLen = await baseSrc.getAttrsSize();
+const { sink, sub } = await xsp.makeEncryptingByteSinkWithAttrs(writer, baseAttrsLen);
+```
 
+Attributes should be written, or size set before content of the first segment is written:
+```javascript
+await sink.writeAttrs(attrs);
+// or
+await byteSink.setAttrSectionSize(attrSize);
+// with following call somewhere before write completion
+await sink.writeAttrs(attrs);
+```
+
+Writing content eventually trickles down as events in subscription. Note that encryption doesn't start without subscription.
+```javascript
 // we can put content into sink at a given offset, result shows in the events
 await sink.write(ofs, content);
 

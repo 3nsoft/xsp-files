@@ -1,5 +1,5 @@
 /*
- Copyright (C) 2015 - 2018 3NSoft Inc.
+ Copyright (C) 2015 - 2019 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -14,9 +14,9 @@
  You should have received a copy of the GNU General Public License along with
  this program. If not, see <http://www.gnu.org/licenses/>. */
 
-import { ByteSource } from './common';
+import { ByteSource, ByteSourceWithAttrs } from './common';
 import { SegmentsReader } from '../segments/reader';
-import { SegmentInfo } from '../segments/xsp-info';
+import { SegmentInfo, loadUintFrom4Bytes } from '../segments/xsp-info';
 import { assert } from '../utils/assert';
 
 
@@ -27,25 +27,18 @@ class DecryptingByteSource implements ByteSource {
 	private seg: SegmentInfo|undefined = undefined;
 	private posInSeg = 0;
 	private bufferedSeg: Uint8Array|undefined = undefined;
-	private contentLen = 0;
 	
 	constructor(
-		private segsSrc: ByteSource,
-		private segReader: SegmentsReader
+		private readonly segsSrc: ByteSource,
+		private readonly segReader: SegmentsReader
 	) {
 		Object.seal(this);
 	}
 
-	private async init(): Promise<void> {
-		if (this.segReader.contentLength !== undefined) {
-			this.contentLen = this.segReader.contentLength;
-		}
-	}
-
-	static async makeFor(segsSrc: ByteSource, segsReader: SegmentsReader):
-			Promise<ByteSource> {
+	static makeFor(
+		segsSrc: ByteSource, segsReader: SegmentsReader
+	): ByteSource {
 		const decr = new DecryptingByteSource(segsSrc, segsReader);
-		await decr.init();
 		const w: ByteSource = {
 			read: decr.read.bind(decr),
 			getSize: decr.getSize.bind(decr),
@@ -66,9 +59,19 @@ class DecryptingByteSource implements ByteSource {
 
 	async seek(offset: number): Promise<void> {
 		if (offset === this.contentPosition) { return; }
+
 		assert(Number.isInteger(offset) && (offset >= 0)
-			&& (this.segReader.isEndlessFile || (offset < this.contentLen)),
+			&& (this.segReader.isEndlessFile || (offset <= this.segReader.contentLength!)),
 			`Given offset ${offset} is out of bounds.`);
+
+		// special case of seeking to the very end
+		if (!this.segReader.isEndlessFile
+		&& (offset === this.segReader.contentLength)) {
+			assert(this.segReader.contentLength > 0);
+			await this.seek(this.segReader.contentLength-1);
+			this.posInSeg += 1;
+			return;
+		}
 
 		const l = this.segReader.locateContentOfs(offset);
 
@@ -92,7 +95,7 @@ class DecryptingByteSource implements ByteSource {
 		if (this.segReader.isEndlessFile) {
 			return;
 		} else {
-			return this.contentLen;
+			return this.segReader.contentLength;
 		}
 	}
 
@@ -220,9 +223,85 @@ function totalLengthOf(arrs: Uint8Array[]): number {
 
 /**
  */
-export function makeDecryptedByteSource(segsSrc: ByteSource,
-		segReader: SegmentsReader): Promise<ByteSource> {
+export function makeDecryptedByteSource(
+	segsSrc: ByteSource, segReader: SegmentsReader
+): ByteSource {
+	assert(segReader.formatVersion === 1,
+		`Seg reader format is ${segReader.formatVersion} instead of 1`);
 	return DecryptingByteSource.makeFor(segsSrc, segReader);
+}
+
+class DecryptingByteSourceWithAttrs {
+
+	private constructor(
+		private readonly mainSrc: ByteSource,
+		private readonly attrSize: number
+		) {
+		Object.freeze(this);
+	}
+
+	static async makeFor(
+		segsSrc: ByteSource, segsReader: SegmentsReader
+	): Promise<ByteSourceWithAttrs> {
+		const mainSrc = DecryptingByteSource.makeFor(segsSrc, segsReader);
+		const attrSizeBytes = await mainSrc.read(4);
+		if (!attrSizeBytes || (attrSizeBytes.length < 4)) { throw new Error(
+			`Too few bytes in a source`); }
+		const attrSize = loadUintFrom4Bytes(attrSizeBytes, 0);
+		await mainSrc.seek(4 + attrSize);
+		if ((await mainSrc.getPosition()) < (4 + attrSize)) { throw new Error(
+			`Byte source is shorter than attributes length`); }
+		const wrap = new DecryptingByteSourceWithAttrs(mainSrc, attrSize);
+		const src: ByteSourceWithAttrs = {
+			getPosition: wrap.getPosition.bind(wrap),
+			getSize: wrap.getSize.bind(wrap),
+			read: mainSrc.read,
+			readAttrs: wrap.readAttrs.bind(wrap),
+			seek: wrap.seek.bind(wrap),
+			getAttrsSize: async () => { return wrap.attrSize; }
+		};
+		return src;
+	}
+
+	async readAttrs(): Promise<Uint8Array> {
+		const initPos = await this.getPosition();
+		await this.mainSrc.seek(4);
+		const attrs = await this.mainSrc.read(this.attrSize);
+		await this.seek(initPos);
+		if (!attrs || (attrs.length !== this.attrSize)) { throw new Error(
+			`Can't read expected attributes' bytes`); }
+		return attrs;
+	}
+
+	async getSize(): Promise<number | undefined> {
+		const s = await this.mainSrc.getSize();
+		if (s === undefined) { return; }
+		else { return s - 4 - this.attrSize; }
+	}
+
+	async seek(offset: number): Promise<void> {
+		if (!Number.isInteger(offset) || (offset < 0)) { throw new Error(
+			`Given invalid offset: ${offset}`); }
+		await this.mainSrc.seek(4 + this.attrSize + offset);
+	}
+
+	async getPosition(): Promise<number> {
+		const p = (await this.mainSrc.getPosition()) - this.attrSize - 4;
+		if (p < 0) { throw new Error(
+			`Await reading of attributes before calling this function`); }
+		return p;
+	}
+
+}
+Object.freeze(DecryptingByteSourceWithAttrs.prototype);
+Object.freeze(DecryptingByteSourceWithAttrs);
+
+export function makeDecryptedByteSourceWithAttrs(
+	segsSrc: ByteSource, segReader: SegmentsReader
+): Promise<ByteSourceWithAttrs> {
+	assert(segReader.formatVersion === 2,
+		`Seg reader format is ${segReader.formatVersion} instead of 2`);
+	return DecryptingByteSourceWithAttrs.makeFor(segsSrc, segReader);
 }
 
 Object.freeze(exports);
