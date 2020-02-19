@@ -1,5 +1,5 @@
 /*
- Copyright (C) 2018 - 2019 3NSoft Inc.
+ Copyright (C) 2018 - 2020 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -361,8 +361,11 @@ class EncryptingByteSink implements ByteSink {
 		return nextSeg;
 	}
 
-	async getSize(): Promise<number|undefined> {
-		return this.segWriter.contentLength;
+	async getSize(): Promise<{ size: number; isEndless: boolean; }> {
+		return {
+			isEndless: this.segWriter.isEndlessFile,
+			size: this.segWriter.contentFiniteLength
+		};
 	}
 
 }
@@ -724,8 +727,10 @@ class EncryptingByteSinkWithAttrs {
 		await this.mainSink.write(4, bytes);
 	}
 
-	async getSize(): Promise<number | undefined> {
-		return this.contentSize;
+	async getSize(): Promise<{ size: number; isEndless: boolean; }> {
+		const { isEndless, size } = await this.mainSink.getSize();
+		const attrSize = (typeof this.attrSize === 'number') ? this.attrSize : 0;
+		return { size: Math.max(0, size - 4 - attrSize), isEndless };
 	}
 
 	async setSize(size: number | undefined): Promise<void> {

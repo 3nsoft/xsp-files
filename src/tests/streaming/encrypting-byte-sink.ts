@@ -1,5 +1,5 @@
 /*
- Copyright (C) 2016 - 2019 3NSoft Inc.
+ Copyright (C) 2016 - 2020 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -162,7 +162,7 @@ describe(`Encrypting byte sink (underlying version format 1)`, () => {
 			await byteSink.write(pointer, content.subarray(pointer, chunkEnd));
 		}
 		await byteSink.done();
-		expect(await byteSink.getSize()).toBe(content.length);
+		expect((await byteSink.getSize()).size).toBe(content.length);
 
 		const { header, allSegs } = await completion;
 		
@@ -284,7 +284,9 @@ describe(`Encrypting byte sink (underlying version format 1)`, () => {
 			// cut2
 			await byteSink.spliceLayout(cut2.ofs, cut2.del, cut2.ins.length);
 			// adding tail
-			const lenAfterCuts = (await byteSink.getSize())!;
+			const sinkSize = await byteSink.getSize();
+			expect(sinkSize.isEndless).toBe(false);
+			const lenAfterCuts = sinkSize.size;
 			await byteSink.setSize(lenAfterCuts + tailAddition.length);
 
 			// writing bytes
@@ -363,7 +365,9 @@ describe(`Encrypting byte sink (underlying version format 1)`, () => {
 			// cut2
 			await byteSink.spliceLayout(cut2.ofs, cut2.del, cut2.ins.length);
 			// adding tail
-			const lenAfterCuts = (await byteSink.getSize())!;
+			const sinkSize = await byteSink.getSize();
+			expect(sinkSize.isEndless).toBe(false);
+			const lenAfterCuts = sinkSize.size;
 			await byteSink.setSize(lenAfterCuts + tailAddition.length);
 
 			// freeze layout

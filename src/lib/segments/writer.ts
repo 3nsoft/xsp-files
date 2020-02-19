@@ -1,5 +1,5 @@
 /*
- Copyright(c) 2015 - 2019 3NSoft Inc.
+ Copyright(c) 2015 - 2020 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -37,6 +37,10 @@ export interface SegmentsWriter {
 	readonly contentLength: number|undefined;
 
 	readonly segmentsLength: number|undefined;
+
+	readonly contentFiniteLength: number;
+
+	readonly segmentsFiniteLength: number;
 
 	segmentInfo(segId: SegId): WritableSegmentInfo;
 
@@ -231,8 +235,8 @@ class SegWriter {
 			key, zerothNonce, segs, undefined,
 			version, randomBytes, cryptor, base);
 		if (segWriter.packing.index.totalSegsLen === undefined) {
-			const baseSegsLen = await base.segSrc.getSize();
-			if (baseSegsLen === undefined) { throw new Error(
+			const { size: baseSegsLen, isEndless } = await base.segSrc.getSize();
+			if (isEndless) { throw new Error(
 				`Base object's source can't tell total segments' length.`); }
 			segWriter.packing.turnEndlessToFinite(baseSegsLen);
 		}
@@ -315,8 +319,14 @@ class SegWriter {
 			get contentLength() {
 				return packing.index.totalContentLen;
 			},
+			get contentFiniteLength() {
+				return packing.index.finitePartContentLen;
+			},
 			get segmentsLength() {
 				return packing.index.totalSegsLen;
+			},
+			get segmentsFiniteLength() {
+				return packing.index.finitePartSegsLen;
 			},
 			defaultSegSize: packing.index.defaultSegSize,
 			version: this.version,

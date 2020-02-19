@@ -1,5 +1,5 @@
 /*
- Copyright(c) 2013 - 2018 3NSoft Inc.
+ Copyright(c) 2013 - 2018, 2020 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -375,7 +375,7 @@ describe(`SegmentsWriter`, () => {
 				{ type: 'update', base: objV1 },
 				getRandom, cryptor);
 			expect(writer.isEndlessFile).toBe(false);
-			expect(writer.segmentsLength).toBe(await objV1.segSrc.getSize());
+			expect(writer.segmentsLength).toBe((await objV1.segSrc.getSize()).size);
 			expect(writer.contentLength).toBe(dataLen);
 		}
 	});

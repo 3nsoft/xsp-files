@@ -1,5 +1,5 @@
 /*
- Copyright (C) 2015 - 2019 3NSoft Inc.
+ Copyright (C) 2015 - 2020 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -91,12 +91,11 @@ class DecryptingByteSource implements ByteSource {
 		this.posInSeg = l.posInSeg;
 	}
 
-	async getSize(): Promise<number|undefined> {
-		if (this.segReader.isEndlessFile) {
-			return;
-		} else {
-			return this.segReader.contentLength;
-		}
+	async getSize(): Promise<{ size: number; isEndless: boolean; }> {
+		return {
+			isEndless: this.segReader.isEndlessFile,
+			size: this.segReader.contentFiniteLength
+		};
 	}
 
 	read(len: number|undefined): Promise<Uint8Array|undefined> {
@@ -273,10 +272,9 @@ class DecryptingByteSourceWithAttrs {
 		return attrs;
 	}
 
-	async getSize(): Promise<number | undefined> {
-		const s = await this.mainSrc.getSize();
-		if (s === undefined) { return; }
-		else { return s - 4 - this.attrSize; }
+	async getSize(): Promise<{ size: number; isEndless: boolean; }> {
+		const { isEndless, size } = await this.mainSrc.getSize();
+		return { size: Math.max(0, size - 4 - this.attrSize), isEndless };
 	}
 
 	async seek(offset: number): Promise<void> {

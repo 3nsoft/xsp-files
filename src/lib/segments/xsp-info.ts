@@ -1,5 +1,5 @@
 /*
- Copyright(c) 2015 - 2019 3NSoft Inc.
+ Copyright(c) 2015 - 2020 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -21,6 +21,7 @@
  */
 
 import { calculateNonce, POLY_LENGTH, NONCE_LENGTH } from '../utils/crypt-utils';
+import { assert } from '../utils/assert';
 
 export interface SegsInfo {
 
@@ -61,17 +62,20 @@ export interface EndlessSegsChainInfo {
 
 export type SegsChainInfo = FiniteSegsChainInfo|EndlessSegsChainInfo;
 
-export function headerContentFor(s: SegsInfo): Uint8Array {
+export function headerContentFor(s: SegsInfo, pads: number): Uint8Array {
+	assert(Number.isInteger(pads) && (pads >= 0));
 	if ((s.formatVersion === 1)
 	|| (s.formatVersion === 2)) {
-		return assembleV1andV2HeaderContent(s);
+		return assembleV1andV2HeaderContent(s, pads);
 	} else {
 		throw new Error(`Version ${s.formatVersion} is not known`);
 	}
 }
 
-function assembleV1andV2HeaderContent(s: SegsInfo): Uint8Array {
-	const headerLen = 1 + 2 + (3 + 4 + NONCE_LENGTH)*s.segChains.length;
+const V_1_2_CHAIN_LEN_IN_H = 3 + 4 + NONCE_LENGTH;
+
+function assembleV1andV2HeaderContent(s: SegsInfo, pads: number): Uint8Array {
+	const headerLen = 1 + 2 + V_1_2_CHAIN_LEN_IN_H*(s.segChains.length + pads);
 	const h = new Uint8Array(headerLen);
 	let pos = 0;
 	
@@ -83,7 +87,10 @@ function assembleV1andV2HeaderContent(s: SegsInfo): Uint8Array {
 	storeUintIn2Bytes(h, pos, s.segSize >>> 8);
 	pos += 2;
 
-	// 4) segment chains
+	// 4.1) pads: array h is already initialized to all zeros
+	pos += V_1_2_CHAIN_LEN_IN_H*pads;
+
+	// 4.2) segment chains
 	for (let i=0; i<s.segChains.length; i+=1) {
 		const chainInfo = s.segChains[i];
 		// 4.1) number of segments in the chain
@@ -100,6 +107,7 @@ function assembleV1andV2HeaderContent(s: SegsInfo): Uint8Array {
 		h.set(chainInfo.nonce, pos);
 		pos += chainInfo.nonce.length;
 	}
+
 	return h;
 }
 
@@ -243,7 +251,9 @@ function readV1orV2Header(h: Uint8Array): SegsInfo {
 		} else {
 			chainInfo = { numOfSegs, lastSegSize, nonce };
 		}
-		segChains.push(chainInfo);
+		if (numOfSegs > 0) {
+			segChains.push(chainInfo);
+		}
 	}
 
 	return { segChains, segSize, formatVersion };
@@ -370,10 +380,28 @@ export class Locations {
 		return lastChain.packed.end;
 	}
 
+	get finitePartSegsLen(): number {
+		const totalLen = this.totalSegsLen;
+		if (typeof totalLen === 'number') { return totalLen; }
+		if (this.locations.length < 2) { return 0; }
+		const l = this.locations[this.locations.length-2];
+		assert(!l.chain.isEndless);
+		return l.packed.end!;
+	}
+
 	get totalContentLen(): number|undefined {
 		if (this.locations.length === 0) { return 0; }
 		const lastChain = this.locations[this.locations.length-1];
 		return lastChain.content.end;
+	}
+
+	get finitePartContentLen(): number {
+		const totalLen = this.totalContentLen;
+		if (typeof totalLen === 'number') { return totalLen; }
+		if (this.locations.length < 2) { return 0; }
+		const l = this.locations[this.locations.length-2];
+		assert(!l.chain.isEndless);
+		return l.content.end!;
 	}
 
 	locateContentOfs(contentPosition: number): LocationInSegment {

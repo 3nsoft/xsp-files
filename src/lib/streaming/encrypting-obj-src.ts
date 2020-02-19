@@ -1,5 +1,5 @@
 /*
- Copyright (C) 2015 - 2019 3NSoft Inc.
+ Copyright (C) 2015 - 2020 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -97,7 +97,7 @@ function makeNonSeekableSrcFromArrays(arrs: Uint8Array[]): ByteSource {
 	const totalLen = totalLengthOf(arrs);
 	let position = 0;
 	const src: ByteSource = {
-		getSize: async () => totalLen,
+		getSize: async () => ({ isEndless: false, size: totalLen }),
 		read: async (len) => {
 			if (len === undefined) {
 				len = totalLen - position;
@@ -146,14 +146,17 @@ class EncryptingObjSource implements ObjSource, ByteSource {
 	}
 
 	private async init(): Promise<void> {
-		const srcContentLen = await this.byteSrc.getSize();
+		const { size: srcContentLen, isEndless } = await this.byteSrc.getSize();
 		if (this.segWriter.isHeaderPacked) {
-			const writerContentLen = this.segWriter.contentLength;
-			if ((writerContentLen !== undefined)
-			&& (srcContentLen !== writerContentLen)) { throw new Error(
-				`Given restarted writer expects content length to be "${this.segWriter.contentLength}", while given content source has length ${srcContentLen}`); }
+			if (!this.segWriter.isEndlessFile) {
+				if (isEndless) { throw new Error(
+					`Given restarted writer expects finite content source, but the given one is endless`); }
+				if (srcContentLen !== this.segWriter.contentLength) {
+					throw new Error(`Given restarted writer expects content length to be "${this.segWriter.contentLength}", while given content source has length ${srcContentLen}`);
+				}
+			}
 		} else {
-			if (srcContentLen !== undefined) {
+			if (!isEndless) {
 				await this.segWriter.setContentLength(srcContentLen);
 			}
 		}
@@ -189,14 +192,17 @@ class EncryptingObjSource implements ObjSource, ByteSource {
 		return h;
 	}
 
-	async getSize(): Promise<number|undefined> {
+	async getSize(): Promise<{ size: number; isEndless: boolean; }> {
 		if (this.segWriter.isEndlessFile) {
-			const contentLen = await this.byteSrc.getSize();
-			if (contentLen !== undefined) {
-				await this.segWriter.setContentLength(contentLen);
+			const { size, isEndless } = await this.byteSrc.getSize();
+			if (!isEndless) {
+				await this.segWriter.setContentLength(size);
 			}
 		}
-		return this.segWriter.segmentsLength;
+		return {
+			isEndless: this.segWriter.isEndlessFile,
+			size: this.segWriter.segmentsFiniteLength
+		};
 	}
 
 	async read(len: number|undefined): Promise<Uint8Array|undefined> {

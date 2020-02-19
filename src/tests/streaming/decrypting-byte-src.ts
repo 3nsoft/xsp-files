@@ -1,5 +1,5 @@
 /*
- Copyright (C) 2016 - 2019 3NSoft Inc.
+ Copyright (C) 2016 - 2020 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -59,7 +59,7 @@ async function testDecrObjSrc(
 		await makeDecryptedByteSourceWithAttrs(seekableSegsSrc, segReader) :
 		makeDecryptedByteSource(seekableSegsSrc, segReader));
 
-	expect(await decr.getSize()).toBe(content.length);
+	expect((await decr.getSize()).size).toBe(content.length);
 
 	// test decryption in one go
 	{

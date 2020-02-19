@@ -1,5 +1,5 @@
 /*
- Copyright (C) 2016 - 2018 3NSoft Inc.
+ Copyright (C) 2016 - 2020 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -85,8 +85,10 @@ describe(`Function makeObjSourceFromArrays`, () => {
 
 			// read encrypted bytes from an object source in chunks
 			const header = await src.readHeader();
-			const readChunkSizes = splitNumber(
-				(await src.segSrc.getSize())!, splitPositions).filter(n => (n > 0));
+			const srcSize = await src.segSrc.getSize();
+			expect(srcSize.isEndless).toBe(false);
+			const readChunkSizes = splitNumber(srcSize.size, splitPositions)
+			.filter(n => (n > 0));
 			const chunkedReads: Uint8Array[] = [];
 			for (let chunkLen of readChunkSizes) {
 				const chunk = (await src.segSrc.read(chunkLen))!;
@@ -110,7 +112,9 @@ describe(`Function makeObjSourceFromArrays`, () => {
 			getRandom, cryptor);
 		const src = await makeObjSourceFromArrays([], segWriter);
 		
-		expect(await src.segSrc.getSize()).toBe(0);
+		const srcSize = await src.segSrc.getSize();
+		expect(srcSize.isEndless).toBe(false);
+		expect(srcSize.size).toBe(0);
 		expect(await src.segSrc.read(undefined)).toBeUndefined(`cause there is no bytes`);
 		
 		const header = await src.readHeader();
@@ -178,8 +182,8 @@ describe(`Function makeEncryptingObjSource`, () => {
 			const src = await makeEncryptingObjSource(byteSrc, segWriter);
 			
 			const segsSize = await src.segSrc.getSize();
-			expect(typeof segsSize).toBe('number');
-			expect(segsSize).toBeGreaterThan(0);
+			expect(segsSize.isEndless).toBe(false);
+			expect(segsSize.size).toBeGreaterThan(0);
 			
 			const header = await src.readHeader();
 			
@@ -194,7 +198,7 @@ describe(`Function makeEncryptingObjSource`, () => {
 			expect(await src.segSrc.read(undefined)).toBeUndefined();
 
 			const encrypted = toOneArray(encryptedChunks);
-			expect(encrypted.length).toBe(segsSize!);
+			expect(encrypted.length).toBe(segsSize.size);
 			
 			const segReader = await makeSegmentsReader(
 				key, zerothNonce, version, header, cryptor);
@@ -216,7 +220,9 @@ describe(`Function makeEncryptingObjSource`, () => {
 			getRandom, cryptor);
 		const src = await makeEncryptingObjSource(byteSrc, segWriter);
 
-		expect(await src.segSrc.getSize()).toBe(0);
+		const srcSize = await src.segSrc.getSize();
+		expect(srcSize.isEndless).toBe(false);
+		expect(srcSize.size).toBe(0);
 		expect(await src.segSrc.read(undefined)).toBeUndefined();
 
 		const header = await src.readHeader();

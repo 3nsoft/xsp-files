@@ -1,5 +1,5 @@
 /*
- Copyright(c) 2018 - 2019 3NSoft Inc.
+ Copyright(c) 2018 - 2020 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -791,7 +791,12 @@ export class PackingInfo {
 	}
 
 	getHeaderContentToPack(): Uint8Array {
-		const h = headerContentFor(this.segs);
+
+		// XXX set some random number of pads, but reasonable:
+		// two sections for 100 segs is ok, but for just 1 seg is not.
+
+		const pads = 0;
+		const h = headerContentFor(this.segs, pads);
 		this.headerPacked = true;
 		return h;
 	}

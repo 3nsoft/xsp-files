@@ -1,5 +1,5 @@
 /*
- Copyright(c) 2018 - 2019 3NSoft Inc.
+ Copyright(c) 2018 - 2020 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -47,9 +47,11 @@ class WriterToArray implements ByteSink {
 			`Can't change size, cause layout is already frozen`); }
 	}
 
-	async getSize(): Promise<number|undefined> {
+	async getSize(): Promise<{ size: number; isEndless: boolean; }> {
 		this.ensureNotDone();
-		return this.size;
+		return ((typeof this.size === 'number') ?
+			{ size: this.size, isEndless: false } :
+			{ size: 0, isEndless: true });
 	}
 
 	async setSize(size: number|undefined): Promise<void> {
@@ -203,8 +205,8 @@ class SourceFromArray implements ByteSource {
 		return ((bytes.length === 0) ? undefined : bytes);
 	}
 
-	async getSize(): Promise<number|undefined> {
-		return this.array.length;
+	async getSize(): Promise<{ size: number; isEndless: boolean; }> {
+		return { size: this.array.length, isEndless: false };
 	}
 
 	async seek(offset: number): Promise<void> {

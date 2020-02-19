@@ -1,5 +1,5 @@
 /*
- Copyright (C) 2016 - 2019 3NSoft Inc.
+ Copyright (C) 2016 - 2020 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -22,7 +22,7 @@ import { base64urlSafe } from '../utils/buffer-utils';
  */
 export interface ByteSource {
 	read(len: number|undefined): Promise<Uint8Array|undefined>;
-	getSize(): Promise<number|undefined>;
+	getSize(): Promise<{ size: number; isEndless: boolean; }>;
 	seek(offset: number): Promise<void>;
 	getPosition(): Promise<number>;
 }
@@ -63,7 +63,7 @@ export interface Layout {
  * This interface is a copy of web3n.streaming.ByteSink.
  */
 export interface ByteSink {
-	getSize(): Promise<number|undefined>;
+	getSize(): Promise<{ size: number; isEndless: boolean; }>;
 	setSize(size: number|undefined): Promise<void>;
 	showLayout(): Promise<Layout>;
 	spliceLayout(pos: number, del: number, ins: number): Promise<void>;

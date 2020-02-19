@@ -1,5 +1,5 @@
 /*
- Copyright(c) 2015 - 2019 3NSoft Inc.
+ Copyright(c) 2015 - 2020 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -33,6 +33,8 @@ export interface SegmentsReader {
 	 * undefined is returned.
 	 */
 	readonly contentLength: number|undefined;
+
+	readonly contentFiniteLength: number;
 
 	readonly segmentsLength: number|undefined;
 
@@ -133,12 +135,12 @@ class SegReader {
 		const data = await this.cryptor.open(segBytes, nonce, this.key);
 		return data;
 	}
-	
+
 	private destroy(): void {
 		this.key.fill(0);
 		this.key = (undefined as any);
 	}
-	
+
 	private wrap(): SegmentsReader {
 		const wrap: SegmentsReader = {
 			locateContentOfs: pos => this.index.locateContentOfs(pos),
@@ -148,6 +150,7 @@ class SegReader {
 			isEndlessFile: (this.index.totalSegsLen === undefined),
 			contentLength: this.index.totalContentLen,
 			segmentsLength: this.index.totalSegsLen,
+			contentFiniteLength: this.index.finitePartContentLen,
 			version: this.version,
 			segmentInfo: s => this.index.segmentInfo(s),
 			segmentInfos: fstSeg => this.index.segmentInfos(fstSeg),
@@ -156,7 +159,7 @@ class SegReader {
 		Object.freeze(wrap);
 		return wrap;
 	}
-	
+
 }
 Object.freeze(SegReader.prototype);
 Object.freeze(SegReader);
