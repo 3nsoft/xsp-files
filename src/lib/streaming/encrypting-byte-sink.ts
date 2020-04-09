@@ -661,7 +661,8 @@ class EncryptingByteSinkWithAttrs {
 			`Given invalid base attrs size: ${baseAttrSize}`); }
 		this.attrSize = baseAttrSize;
 		if (segWriter.contentLength !== undefined) {
-			this.contentSize = segWriter.contentLength - 4 - this.attrSize;
+			this.contentSize = segWriter.contentLength - (
+				(this.attrSize === 0) ? 0 : 4+this.attrSize);
 			if (this.contentSize < 0) { throw new Error(
 				`Given base attributes' size implies negative content size`); }
 		}
@@ -710,9 +711,10 @@ class EncryptingByteSinkWithAttrs {
 				await this.mainSink.setSize(4 + this.attrSize + this.contentSize);
 			}
 		} else {
-			const prevAttrSize = this.attrSize;
+			const del = ((this.attrSize === 0) ? 0 : 4 + this.attrSize);
 			this.attrSize = size;
-			await this.mainSink.spliceLayout(0, 4+prevAttrSize, 4+this.attrSize);
+			const ins = 4 + this.attrSize;
+			await this.mainSink.spliceLayout(0, del, ins);
 		}
 		await this.mainSink.write(0, packUintToBytes(this.attrSize));
 	}
