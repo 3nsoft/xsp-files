@@ -15,7 +15,7 @@
  this program. If not, see <http://www.gnu.org/licenses/>. */
 
 import { SegId, Locations, SegsInfo, headerContentFor, SegsChainInfo,
-	FiniteSegsChainInfo, InfoExtender }
+	FiniteSegsChainInfo, InfoExtender, EndlessSegsChainInfo, SegmentInfo }
 	from './xsp-info';
 import { calculateNonce, NONCE_LENGTH } from '../utils/crypt-utils';
 import { Layout, LayoutBaseSection, LayoutNewSection } from '../streaming/common';
@@ -119,7 +119,7 @@ export class PackingInfo {
 		for (let i=0; i<this.segs.segChains.length; i+=1) {
 			const chain = this.segs.segChains[i] as NewSegsChainInfo;
 			chain.type = 'new';
-			chain.newSegs = new NewSegments(chain)
+			chain.newSegs = new NewSegments(chain);
 		}
 		this.headerPacked = true;
 	}
@@ -314,13 +314,75 @@ export class PackingInfo {
 
 	async setContentLength(contentLen: number|undefined): Promise<void> {
 		this.ensureGeomNotLocked();
-
 		if (contentLen === undefined) {
-			if (this.index.totalContentLen === undefined) { return; }
-			await this.addChain();
-			return;
+			await this.setEndlessContent();
+		} else {
+			await this.setFiniteContentLen(contentLen);
+		}
+	}
+
+	private async setEndlessContent(): Promise<void> {
+		if (this.index.totalContentLen === undefined) { return; }
+
+		if (this.segs.segChains.length === 0) {
+			return this.addChain();
 		}
 
+		const lastChain = this.segs.segChains[this.segs.segChains.length-1];
+		if (lastChain.type !== 'new') {
+			return this.addChain();
+		}
+
+		const changedToEndless = lastChain.newSegs.turnIntoEndlessChain();
+		if (changedToEndless) {
+			delete (lastChain as FiniteSegsChainInfo).numOfSegs;
+			delete (lastChain as FiniteSegsChainInfo).lastSegSize;
+			(lastChain as EndlessSegsChainInfo).isEndless = true;
+			this.index.update();
+		} else {
+			await this.addChain();
+		}
+	}
+
+	finitePartOfContentLen(): number {
+		const contentLen = this.index.totalContentLen;
+		if (contentLen !== undefined) { return contentLen; }
+		const lastPackedSeg = this.lastPackedSeg();
+		if (lastPackedSeg) {
+			const seg = this.index.segmentInfo(lastPackedSeg);
+			return (seg.contentOfs + seg.contentLen);
+		} else {
+			return 0;
+		}
+	}
+
+	finitePartOfSegmentsLen(): number {
+		const segmentsLen = this.index.totalSegsLen;
+		if (segmentsLen !== undefined) { return segmentsLen; }
+		const lastPackedSeg = this.lastPackedSeg();
+		if (lastPackedSeg) {
+			const seg = this.index.segmentInfo(lastPackedSeg);
+			return (seg.packedOfs + seg.packedLen);
+		} else {
+			return 0;
+		}
+	}
+
+	private lastPackedSeg(): SegId|undefined {
+		const contentLen = this.index.totalContentLen;
+		if (contentLen !== undefined) { return; }
+		for (let i=this.segs.segChains.length-1; i>=0; i-=1) {
+			const c = this.segs.segChains[i];
+			if (c.type === 'base') {
+				return { chain: i, seg: c.numOfSegs - 1 };
+			}
+			const packedSeg = c.newSegs.indexOfRightmostPackedSeg;
+			if (packedSeg === undefined) { continue; }
+			return { chain: i, seg: packedSeg };
+		}
+	}
+
+	private async setFiniteContentLen(contentLen: number): Promise<void> {
 		assert(Number.isInteger(contentLen) && (contentLen >= 0),
 			`Given invalid file content length ${contentLen}`);
 
@@ -426,8 +488,11 @@ export class PackingInfo {
 			if (!c.newSegs.canCutTail(leftSeg, false)) { throw writeExc(
 				'segsPacked', `Can't cut middle of a new segment chain`); }
 			let left = await cutMiddleOfHeadBaseBytesIn(
-				c, leftSeg, leftPos, rightSeg, rightPos);
+				c, leftSeg, leftPos, rightSeg, rightPos,
+				this.randomBytes, this.segs.segSize);
 			if (left) {
+				const cInd = this.getChainIndex(c);
+				this.segs.segChains.splice(cInd, 0, left);
 				return { left, right: c };
 			}
 			if ((leftSeg === rightSeg) && (leftPos === rightPos)) {
@@ -446,9 +511,7 @@ export class PackingInfo {
 				const endPosInSeg = newChainLen - endSeg*this.segs.segSize;
 				await this.cutChainTail(c, endSeg, endPosInSeg);
 			}
-			left = c;
-			const right = left;
-			return { left, right };
+			return { left: c, right: c };
 		}
 
 		const c2 = copy(c);
@@ -512,14 +575,8 @@ export class PackingInfo {
 				headBytes.len = posInSeg;
 			}
 
-			delete c.baseOfs;
-			delete c.baseContentOfs;
-			(c as any as NewSegsChainInfo).type = 'new';
-			(c as any as NewSegsChainInfo).headBytes = headBytes;
-			c.lastSegSize = headBytes.len;
-			c.nonce = await this.randomBytes(NONCE_LENGTH);
-			(c as any as NewSegsChainInfo).newSegs = new NewSegments(c);
-			return c as any as NewSegsChainInfo;
+			return turnBaseToNewFiniteSegsChainInfo(
+				c, headBytes, this.randomBytes);
 		}
 
 		if (atHead) {
@@ -534,15 +591,8 @@ export class PackingInfo {
 				ofs: posInSeg
 			};
 
-			const edge: NewSegsChainInfo = {
-				nonce: await this.randomBytes(NONCE_LENGTH),
-				numOfSegs: 1,
-				lastSegSize: this.segs.segSize - posInSeg,
-				type: 'new',
-				newSegs: undefined as any,
-				headBytes
-			};
-			edge.newSegs = new NewSegments(edge);
+			const edge = await makeFiniteNewSegsChainInfo(
+				1, headBytes.len, headBytes, this.randomBytes);
 
 			c.nonce = calculateNonce(c.nonce, 1);
 			c.baseOfs += this.segs.segSize + POLY_LENGTH;
@@ -563,15 +613,8 @@ export class PackingInfo {
 				ofs: 0
 			};
 
-			const edge: NewSegsChainInfo = {
-				nonce: await this.randomBytes(NONCE_LENGTH),
-				numOfSegs: 1,
-				lastSegSize: posInSeg,
-				type: 'new',
-				newSegs: undefined as any,
-				headBytes
-			};
-			edge.newSegs = new NewSegments(edge);
+			const edge = await makeFiniteNewSegsChainInfo(
+				1, posInSeg, headBytes, this.randomBytes);
 
 			c.numOfSegs -= 1;
 			c.lastSegSize = this.segs.segSize;
@@ -608,12 +651,7 @@ export class PackingInfo {
 				const last = this.getChain(this.segs.segChains.length-1);
 				assert(!last.isEndless, `Can't add second endless chain.`);
 			}
-			chain = {
-				isEndless: true,
-				nonce: await this.randomBytes(NONCE_LENGTH),
-				type: 'new',
-				newSegs: undefined as any
-			};
+			chain = await makeEndlessNewSegsChainInfo(undefined, this.randomBytes);
 		} else {
 			if ((chainInd === this.segs.segChains.length) && (chainInd > 0)) {
 				const last = this.getChain(chainInd-1);
@@ -622,17 +660,11 @@ export class PackingInfo {
 			}
 			const { numOfSegs, lastSegSize } = chainSizeForContent(
 				contentLen, this.segs.segSize);
-			chain = {
-				nonce: await this.randomBytes(NONCE_LENGTH),
-				numOfSegs,
-				lastSegSize,
-				type: 'new',
-				newSegs: undefined as any
-			};
+			chain = await makeFiniteNewSegsChainInfo(
+				numOfSegs, lastSegSize, undefined, this.randomBytes);
 		}
-		chain.newSegs = new NewSegments(chain);
-
 		this.segs.segChains.splice(chainInd, 0, chain);
+
 		if (updateIndex) {
 			this.index.update();
 		}
@@ -690,6 +722,7 @@ export class PackingInfo {
 				if (ins > 0) {
 					await this.growFileBy(ins);
 				}
+				return;
 			}
 		}
 
@@ -703,7 +736,8 @@ export class PackingInfo {
 				if (!left.isEndless) {
 					this.growChainTail(left, ins, false);
 				} // else do nothing
-			} else if (left && (left.type === 'new')) {
+			} else if (left && (left.type === 'new')
+			&& left.newSegs.canGrowTail()) {
 				this.growChainTail(left, ins, false);
 			} else if (left) {
 				await this.addChain(ins, this.getChainIndex(left) + 1, false);
@@ -717,12 +751,11 @@ export class PackingInfo {
 
 	private async cutForInsert(
 		pos: number, rem: number
-	): Promise<{ left?: WritableSegsChainInfo;
-				right: WritableSegsChainInfo; }> {
+	): Promise<{ left?: WritableSegsChainInfo; right: WritableSegsChainInfo; }> {
 		const leftCut = this.index.locateContentOfs(pos);
 		const leftCutIsBetweenChains =
 			((leftCut.seg === 0) && (leftCut.posInSeg === 0));
-		
+
 		// no removal and cut between two chains
 		if ((rem === 0) && leftCutIsBetweenChains) {
 			const left = ((leftCut.chain === 0) ?
@@ -874,7 +907,7 @@ function cutStartOfHeadBaseBytesIn(
 
 async function cutMiddleOfHeadBaseBytesIn(
 	c: NewSegsChainInfo, leftSeg: number, leftPos: number,
-	rightSeg: number, rightPos: number
+	rightSeg: number, rightPos: number, randomBytes: RNG, segSize: number
 ): Promise<WritableSegsChainInfo|undefined> {
 	if (!c.headBytes) { return; }
 	if ((leftSeg > 0) || (leftPos > c.headBytes.len)) { return; }
@@ -887,18 +920,69 @@ async function cutMiddleOfHeadBaseBytesIn(
 		};
 		c.headBytes.ofs += rightPos;
 		c.headBytes.len -= rightPos;
-		const left: WritableSegsChainInfo = {
-			nonce: await this.randomBytes(NONCE_LENGTH),
-			numOfSegs: 1,
-			lastSegSize: headBytes.len,
-			type: 'new',
-			newSegs: undefined as any,
-			headBytes
-		};
+		if (!c.isEndless) {
+			const newContentInC =
+				segSize*(c.numOfSegs - 1) +
+				c.lastSegSize - rightPos;
+			const { numOfSegs, lastSegSize } = chainSizeForContent(
+				newContentInC, segSize);
+			c.numOfSegs = numOfSegs;
+			c.lastSegSize = lastSegSize;
+		}
+		const left = await makeFiniteNewSegsChainInfo(
+			1, headBytes.len, headBytes, randomBytes);
 		return left;
 	} else {
 		c.headBytes.len = leftPos;
 	}
+}
+
+async function makeFiniteNewSegsChainInfo(
+	numOfSegs: number, lastSegSize: number, headBytes: BaseBytesInfo|undefined,
+	randomBytes: RNG
+): Promise<NewSegsChainInfo> {
+	const c: NewSegsChainInfo = {
+		type: 'new',
+		newSegs: undefined as any,
+		nonce: await randomBytes(NONCE_LENGTH),
+		numOfSegs,
+		lastSegSize,
+	};
+	c.newSegs = new NewSegments(c);
+	if (headBytes) {
+		c.headBytes = headBytes;
+	}
+	return c;
+}
+
+async function makeEndlessNewSegsChainInfo(
+	headBytes: BaseBytesInfo|undefined, randomBytes: RNG
+): Promise<NewSegsChainInfo> {
+	const c: NewSegsChainInfo = {
+		type: 'new',
+		newSegs: undefined as any,
+		nonce: await randomBytes(NONCE_LENGTH),
+		isEndless: true
+	};
+	c.newSegs = new NewSegments(c);
+	if (headBytes) {
+		c.headBytes = headBytes;
+	}
+	return c;
+}
+
+async function turnBaseToNewFiniteSegsChainInfo(
+	c: BaseSegsChainInfo, headBytes: BaseBytesInfo, randomBytes: RNG
+): Promise<NewSegsChainInfo> {
+	assert(c.numOfSegs === 1);
+	const newC = await makeFiniteNewSegsChainInfo(
+		1, headBytes.len, headBytes, randomBytes);
+	delete c.baseOfs;
+	delete c.baseContentOfs;
+	for (const key of Object.keys(newC)) {
+		c[key] = newC[key];
+	}
+	return c as any as NewSegsChainInfo;
 }
 
 function cutTailOfHeadBaseBytesIn(

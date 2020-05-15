@@ -14,9 +14,9 @@
  You should have received a copy of the GNU General Public License along with
  this program. If not, see <http://www.gnu.org/licenses/>. */
 
-import { ByteSink, Observer, Layout, ByteSinkWithAttrs, ByteSourceWithAttrs } from './common';
-import { SegmentsWriter, writeExc, NewSegmentInfo } from '../segments/writer';
-import { LocationInSegment, SegId, storeUintIn4Bytes } from '../segments/xsp-info';
+import { ByteSink, Observer, Layout, ByteSinkWithAttrs } from './common';
+import { SegmentsWriter, writeExc, NewSegmentInfo, WritableSegmentInfo } from '../segments/writer';
+import { LocationInSegment, storeUintIn4Bytes } from '../segments/xsp-info';
 import { assert } from '../utils/assert';
 import { SingleProc, makeSyncedFunc } from '../utils/process-syncing';
 
@@ -26,17 +26,25 @@ class EncryptingByteSink implements ByteSink {
 	private backpressure: (() => Promise<void>)|undefined = undefined;
 	private isCompleted = false;
 	private buffer = new ChunksBuffer();
-	private biggestContentOfs = 0;
-	private reencryptSegs: UnpackedSegsForReencryption|undefined = undefined;
+	private biggestContentOfs: number;
+	private size: number|undefined;
+	private writerFlippedToEndless = false;
+	private reencryptSegs: UnpackedSegsForReencryption|undefined;
 
 	constructor(
 		private segWriter: SegmentsWriter
 	) {
-		this.reencryptSegs = (this.segWriter.hasBase ?
-			new UnpackedSegsForReencryption(
+		if (this.segWriter.hasBase) {
+			this.reencryptSegs = new UnpackedSegsForReencryption(
 				this.segWriter.unpackedReencryptChainSegs.bind(this.segWriter),
-				this.packAndOutSeg.bind(this)) :
-			undefined);
+				this.packAndOutSeg.bind(this));
+			this.size = this.segWriter.contentLength;
+			this.biggestContentOfs = ((this.size === undefined) ? 0 : this.size);
+		} else {
+			this.reencryptSegs = undefined;
+			this.size = undefined;
+			this.biggestContentOfs = 0;
+		}
 		Object.seal(this);
 	}
 
@@ -79,7 +87,14 @@ class EncryptingByteSink implements ByteSink {
 	}
 
 	async showLayout(): Promise<Layout> {
-		return this.segWriter.showContentLayout();
+		if (this.writerFlippedToEndless) {
+			await this.segWriter.setContentLength(this.size);
+			const layout = this.segWriter.showContentLayout();
+			await this.segWriter.setContentLength(undefined);
+			return layout;
+		} else {
+			return this.segWriter.showContentLayout();
+		}
 	}
 
 	async spliceLayout(pos: number, del: number, ins: number): Promise<void> {
@@ -88,16 +103,29 @@ class EncryptingByteSink implements ByteSink {
 		assert(Number.isInteger(pos) && (pos >= 0)
 			&& Number.isInteger(del) && (del >= 0)
 			&& Number.isInteger(ins) && (ins >= 0), `Invalid parameters given`);
-		if (del > 0) {
-			this.buffer.ensureNoOverlap(pos, pos+del);
-		}
 		await this.segWriter.splice(pos, del, ins);
-		this.buffer.changePositionsOnSplicing(pos, del, ins);
+		this.buffer.splice(pos, del, ins);
+		if (this.size !== undefined) {
+			this.size = Math.max(0, this.size - del + ins);
+			if (!this.writerFlippedToEndless) {
+				await this.segWriter.setContentLength(undefined);
+				this.writerFlippedToEndless = true;
+			}
+			if (this.biggestContentOfs > this.size) {
+				this.biggestContentOfs = this.size;
+			}
+		}
 	}
 
 	async freezeLayout(): Promise<void> {
 		if (this.segWriter.isHeaderPacked) { return; }
 		if (!this.encOutput) { throw new Error(`This sink is not subsribed to`); }
+
+		if (this.writerFlippedToEndless) {
+			await this.segWriter.setContentLength(this.size);
+			this.writerFlippedToEndless = false;
+		}
+
 		const header = await this.segWriter.packHeader();
 		if (this.backpressure) {
 			await this.backpressure();
@@ -125,7 +153,16 @@ class EncryptingByteSink implements ByteSink {
 			return;
 		}
 
-		await this.packTailFromBufferIfEndless();
+		if (!this.segWriter.isHeaderPacked) {
+			if (this.writerFlippedToEndless) {
+				await this.segWriter.setContentLength(this.size);
+				this.writerFlippedToEndless = false;
+			} else if (this.size === undefined) {
+				await this.segWriter.setContentLength(this.biggestContentOfs);
+			}
+		}
+
+		await this.packUnpackedBytesAtSinkCompletion();
 
 		if (!this.segWriter.areSegmentsPacked) {
 			if (this.reencryptSegs) {
@@ -140,15 +177,18 @@ class EncryptingByteSink implements ByteSink {
 			}
 		}
 
-		if (!this.segWriter.isHeaderPacked) {
-			await this.freezeLayout();
-		}
+		await this.freezeLayout();
 		this.encOutput.complete!();
 	}
 
 	async write(pos: number, bytes: Uint8Array): Promise<void> {
 		if (!this.encOutput) { throw new Error(`This sink is not subsribed to`); }
 		if (this.isCompleted) { throw new Error(`Writer is already done.`); }
+		if (this.size !== undefined) {
+			if (this.size < (pos + bytes.length)) {
+				throw new Error(`Writing outside of sink size. Use respective splice before write.`);
+			}
+		}
 
 		if (bytes.length === 0) { return; }
 
@@ -186,34 +226,36 @@ class EncryptingByteSink implements ByteSink {
 		this.encOutput!.next!({ type: 'seg', seg, segInfo });
 	}
 
-	private async packTailFromBufferIfEndless(): Promise<void> {
-		if (!this.segWriter.isEndlessFile) { return; }
-
-		const tailChunk = this.buffer.extractTail();
-		if (!tailChunk) {
-			if (!this.segWriter.isHeaderPacked) {
-				await this.setSize(this.biggestContentOfs);
-			}
-			return;
+	private async packUnpackedBytesAtSinkCompletion(): Promise<void> {
+		// try to write everything that may be stuck in a buffer
+		const bufferedChunks = this.buffer.extractAllChunks();
+		for (const c of bufferedChunks) {
+			await this.write(c.start, c.bytes);
 		}
-
-		const pos = this.segWriter.locateContentOfs(tailChunk.start);
-		if (pos.posInSeg !== 0) { throw new Error(
-			`There are missing bytes`); }
-		const segInfo = this.segWriter.segmentInfo(pos);
-		if (segInfo.type !== 'new') { throw new Error(
-			`Unexpected not-new segment`); }
-		await this.packAndOutSeg(segInfo, tailChunk.bytes);
+		// case of endless file and odd length last chunk, stucking in buffer
+		if (this.segWriter.isEndlessFile) {
+			const tailChunk = this.buffer.extractTail();
+			if (tailChunk) {
+				const pos = this.segWriter.locateContentOfs(tailChunk.start);
+				if (pos.posInSeg !== 0) { throw new Error(
+					`There are missing bytes`); }
+				const segInfo = this.segWriter.segmentInfo(pos);
+				if (segInfo.type !== 'new') { throw new Error(
+					`Unexpected not-new segment`); }
+				await this.packAndOutSeg(segInfo, tailChunk.bytes);
+			}
+		}
 	}
 
-	private getWholeSegsAndBufferRest(pos: LocationInSegment, bytes: Uint8Array):
-			[ NewSegmentInfo, Uint8Array ][] {
+	private getWholeSegsAndBufferRest(
+		pos: LocationInSegment, bytes: Uint8Array
+	): [ NewSegmentInfo, Uint8Array ][] {
 		const wholeSegs: [ NewSegmentInfo, Uint8Array ][] = [];
 		const segs = this.segWriter.segmentInfos(pos);
 
 		// first segment
 		{
-			const { value: fstSeg } = segs.next();
+			const { value: fstSeg } = segs.next() as IteratorResult<WritableSegmentInfo, WritableSegmentInfo>;
 
 			if (fstSeg.type === 'base') { throw writeExc('segsPacked',
 				`Given bytes overlap base bytes`); }
@@ -225,9 +267,9 @@ class EncryptingByteSink implements ByteSink {
 
 			if (posOfsInSeg === 0) {
 				if (bytes.length < fstSeg.contentLen) {
-					const tailBytes = this.buffer.findAndExtract(
-						fstSeg.contentOfs+bytes.length,
-						fstSeg.contentOfs+fstSeg.contentLen);
+					const tailStart = fstSeg.contentOfs + bytes.length;
+					const tailEnd = fstSeg.contentOfs + fstSeg.contentLen;
+					const tailBytes = this.buffer.findAndExtract(tailStart, tailEnd);
 					if (!tailBytes) {
 						this.buffer.add(fstSeg.contentOfs, bytes);
 						return wholeSegs;
@@ -243,25 +285,25 @@ class EncryptingByteSink implements ByteSink {
 				bytes = bytes.subarray(wholeSeg.length);
 				wholeSegs.push([ fstSeg, wholeSeg ]);
 			} else {
-				const headChunk = this.buffer.findChunkWith(
-					fstSeg.contentOfs, fstSeg.contentOfs+posOfsInSeg);
+				const headStart = fstSeg.contentOfs;
+				const headEnd = fstSeg.contentOfs + posOfsInSeg;
+				const headChunk = this.buffer.findChunkWith(headStart, headEnd);
 
 				if ((posOfsInSeg + bytes.length) < fstSeg.contentLen) {
-					const tailChunk = this.buffer.findChunkWith(
-						fstSeg.contentOfs+posOfsInSeg+bytes.length,
-						fstSeg.contentOfs+posOfsInSeg+fstSeg.contentLen);
+					const tailStart = fstSeg.contentOfs + posOfsInSeg + bytes.length;
+					const tailEnd = fstSeg.contentOfs + fstSeg.contentLen;
+					const tailChunk = this.buffer.findChunkWith(tailStart, tailEnd);
 					if (!headChunk || !tailChunk) {
 						this.buffer.add(fstSeg.contentOfs+posOfsInSeg, bytes);
 						return wholeSegs;
 					}
 					const wholeSeg = new Uint8Array(fstSeg.contentLen);
-					const headBytes = this.buffer.extractBytesFrom(headChunk,
-						fstSeg.contentOfs, fstSeg.contentOfs+posOfsInSeg);
+					const headBytes = this.buffer.extractBytesFrom(
+						headChunk, headStart, headEnd);
 					wholeSeg.set(headBytes);
 					wholeSeg.set(bytes, posOfsInSeg);
-					const tailBytes = this.buffer.extractBytesFrom(tailChunk,
-						fstSeg.contentOfs+posOfsInSeg+bytes.length,
-						fstSeg.contentOfs+posOfsInSeg+fstSeg.contentLen);
+					const tailBytes = this.buffer.extractBytesFrom(
+						tailChunk, tailStart, tailEnd);
 					wholeSeg.set(tailBytes, posOfsInSeg+bytes.length);
 					wholeSegs.push([ fstSeg, wholeSeg ]);
 					return wholeSegs;
@@ -272,8 +314,8 @@ class EncryptingByteSink implements ByteSink {
 				bytes = bytes.subarray(oddFstChunk.length);
 				if (headChunk) {
 					const wholeSeg = new Uint8Array(fstSeg.contentLen);
-					const headBytes = this.buffer.extractBytesFrom(headChunk,
-						fstSeg.contentOfs, fstSeg.contentOfs+posOfsInSeg);
+					const headBytes = this.buffer.extractBytesFrom(
+						headChunk, headStart, headEnd);
 					wholeSeg.set(headBytes);
 					wholeSeg.set(oddFstChunk, posOfsInSeg);
 					wholeSegs.push([ fstSeg, wholeSeg ]);
@@ -285,7 +327,7 @@ class EncryptingByteSink implements ByteSink {
 
 		// other segments
 		while (bytes.length > 0) {
-			const { done, value: seg } = segs.next();
+			const { done, value: seg } = segs.next() as IteratorResult<WritableSegmentInfo, WritableSegmentInfo>;
 			if (done) { throw writeExc('argsOutOfBounds',
 				`Given bytes extend over file's end`); }
 
@@ -317,53 +359,25 @@ class EncryptingByteSink implements ByteSink {
 
 		return wholeSegs;
 	}
-	
+
 	async setSize(size: number|undefined): Promise<void> {
-		const tailChunk = ((size === undefined) ?
-			undefined : this.buffer.extractTailIfEndsAt(size));
-
 		await this.segWriter.setContentLength(size);
-
-		if (!tailChunk) { return; }
-
-		const pos = this.segWriter.locateContentOfs(tailChunk.start);
-		let segInfo = this.segWriter.segmentInfo(pos);
-		if (segInfo.type !== 'new') { throw new Error(
-			`Unexpected not-new segment`); }
-		let segEnd = segInfo.contentOfs + segInfo.contentLen;
-
-		// tail chunk is inside of the last segment
-		if (segEnd === size) {
-			if (pos.posInSeg !== 0) {
-				this.buffer.add(tailChunk.start, tailChunk.bytes);
-			} else {
-				await this.packAndOutSeg(segInfo, tailChunk.bytes);
+		this.size = size;
+		if (this.size === undefined) {
+			this.writerFlippedToEndless = false;
+		} else {
+			this.buffer.cutToSize(this.size);
+			if (this.biggestContentOfs > this.size) {
+				this.biggestContentOfs = this.size;
 			}
-			return;
+			await this.segWriter.setContentLength(undefined);
+			this.writerFlippedToEndless = true;
 		}
-
-		// tail chunk spans two last segments, and only last one is in chunk bytes
-		const lastSeg = this.getNextSeg(pos);
-		if (lastSeg.type !== 'new') { throw new Error(
-			`Unexpected not-new segment`); }
-		const bytesToBuffer = tailChunk.bytes.subarray(
-			0, tailChunk.bytes.length - lastSeg.contentLen);
-		const lastSegBytes = tailChunk.bytes.subarray(bytesToBuffer.length);
-		this.buffer.add(tailChunk.start, bytesToBuffer);
-		await this.packAndOutSeg(lastSeg, lastSegBytes);
-	}
-
-	private getNextSeg(seg: SegId) {
-		const iter = this.segWriter.segmentInfos(seg);
-		iter.next(); // should be this seg
-		const { done, value: nextSeg } = iter.next();
-		if (done) { throw new Error(`Unexpected end of segment's sequence`); }
-		return nextSeg;
 	}
 
 	async getSize(): Promise<{ size: number; isEndless: boolean; }> {
 		return {
-			isEndless: this.segWriter.isEndlessFile,
+			isEndless: (this.size === undefined),
 			size: this.segWriter.contentFiniteLength
 		};
 	}
@@ -408,7 +422,7 @@ class UnpackedSegsForReencryption {
 		if (!segs) { return; }
 		const segsToPack: NewSegmentInfo[] = [];
 		let possibleReencryptChain = segInfo.chain - 1;
-		for (let i=segs.length-1; i<0; i-=1) {
+		for (let i=segs.length-1; i>=0; i-=1) {
 			const segInfo = segs[i];
 			if (segInfo.chain === possibleReencryptChain) {
 				segsToPack.push(segInfo);
@@ -450,12 +464,54 @@ class ChunksBuffer {
 		}
 	}
 
-	changePositionsOnSplicing(pos: number, del: number, ins: number): void {
-		const changeStart = pos - del;
-		const delta = ins - del;
-		for (let i=0; i<this.chunks.length; i+=1) {
+	splice(pos: number, del: number, ins: number): void {
+		const rightCutPos = pos + del;
+		let i = 0;
+		// we loop to find where to cut and do it
+		while (i < this.chunks.length) {
 			const chunk = this.chunks[i];
-			if (chunk.end < changeStart) { continue; }
+			if (chunk.end <= pos) {
+				i += 1;
+				continue;
+			}
+			if (rightCutPos <= chunk.start) { break; }
+			if (pos <= chunk.start) {
+				if (chunk.end <= rightCutPos) {
+					this.chunks.splice(i, 1);
+					continue;
+				} else {
+					const cutOfs = rightCutPos - chunk.start;
+					chunk.bytes = chunk.bytes.subarray(cutOfs);
+					chunk.start = rightCutPos;
+					break;
+				}
+			} else {
+				if (chunk.end <= rightCutPos) {
+					const newLen = pos - chunk.start;
+					chunk.bytes = chunk.bytes.subarray(0, newLen);
+					chunk.end = pos;
+					i += 1;
+					continue;
+				} else {
+					const left = chunk.bytes.subarray(0, pos - chunk.start);
+					const right = chunk.bytes.subarray(rightCutPos - chunk.start);
+					chunk.bytes = left;
+					chunk.end = pos;
+					const rightChunk: Chunk = {
+						bytes: right,
+						start: rightCutPos,
+						end: chunk.end,
+					};
+					i += 1;
+					this.chunks.splice(i, 0, rightChunk);
+					break;
+				}
+			}
+		}
+		// shift all chunks, starting with i
+		const delta = ins - del;
+		while (i < this.chunks.length) {
+			const chunk = this.chunks[i];
 			chunk.start += delta;
 			chunk.end += delta;
 		}
@@ -468,30 +524,29 @@ class ChunksBuffer {
 			const existing = this.chunks[i];
 			if (existing.end < start) { continue; }
 			if (existing.end === start) {
-				const joinedBytes = new Uint8Array(
-					existing.bytes.length+bytes.length);
-				joinedBytes.set(existing.bytes);
-				joinedBytes.set(bytes, existing.bytes.length);
-				existing.bytes = joinedBytes;
+				existing.bytes = joinBytes(existing.bytes, bytes);
 				existing.end = end;
-				return;
-			}
-			if (end === existing.start) {
-				const joinedBytes = new Uint8Array(
-					bytes.length+existing.bytes.length);
-				joinedBytes.set(bytes);
-				joinedBytes.set(existing.bytes, bytes.length);
-				existing.bytes = joinedBytes;
+				if ((i+1) < this.chunks.length) {
+					const following = this.chunks[i+1];
+					if (existing.end === following.start) {
+						existing.bytes = joinBytes(existing.bytes, following.bytes);
+						existing.end = following.end;
+						this.chunks.splice(i+1, 1);
+					}
+				}
+			} else if (end === existing.start) {
+				existing.bytes = joinBytes(bytes, existing.bytes);
 				existing.start = start;
-				return;
+			} else {
+				assert(end < existing.start,
+					`Overlap of new bytes with already buffered ones`);
+				// Note that below we copy bytes into new array. This is done to
+				// detouch from any incoming buffers that may be shared/reused
+				// elsewhere, wracking havoc here.
+				this.chunks.splice(i, 0, {
+					start, end, bytes: new Uint8Array(bytes)
+				});
 			}
-			assert(end < existing.start,
-				`Overlap of new bytes with already buffered ones`);
-			// Note that below we copy bytes into new array. This is done to
-			// detouch from any incoming buffers that may be shared/reused
-			// elsewhere, wracking havoc here.
-			const newChunk: Chunk = { start, end, bytes: new Uint8Array(bytes) };
-			this.chunks.splice(i, 0, newChunk);
 			return;
 		}
 
@@ -530,12 +585,14 @@ class ChunksBuffer {
 				const cutInd = chunk.bytes.length - endOfs;
 				const extract = chunk.bytes.subarray(0, cutInd);
 				chunk.bytes = chunk.bytes.subarray(cutInd);
+				chunk.start += extract.length;
 				return extract;
 			}
 		} else {
 			if (endOfs === 0) {
 				const extract = chunk.bytes.subarray(startOfs);
 				chunk.bytes = chunk.bytes.subarray(0, startOfs);
+				chunk.end -= extract.length;
 				return extract;
 			} else {
 				const rightCutInd = chunk.bytes.length - endOfs;
@@ -580,23 +637,39 @@ class ChunksBuffer {
 		return this.chunks.pop();
 	}
 
-	extractTailIfEndsAt(end: number): Chunk|undefined {
-		if (this.chunks.length === 0) { return; }
-		const last = this.chunks[this.chunks.length-1];
-		if (last.end < end) {
-			return;
-		} else if (last.end === end) {
-			this.chunks.pop();
-			return last;
-		} else {
-			throw writeExc('segsPacked',
-				`Given end value cuts already written bytes`);
+	cutToSize(size: number): void {
+		for (let i=0; i<this.chunks.length; i+=1) {
+			const chunk = this.chunks[i];
+			if (size <= chunk.start) {
+				this.chunks.splice(i, this.chunks.length);
+				return;
+			} else if (chunk.end <= size) {
+				continue;
+			} else {
+				const newLen = size - chunk.start;
+				chunk.bytes = chunk.bytes.subarray(0, newLen);
+				chunk.end = size;
+				this.chunks.splice(i+1, this.chunks.length);
+				return;
+			}
 		}
+	}
+
+	extractAllChunks(): Chunk[] {
+		if (this.chunks.length === 0) { return []; }
+		return this.chunks.splice(0, this.chunks.length);
 	}
 
 }
 Object.freeze(ChunksBuffer.prototype);
 Object.freeze(ChunksBuffer);
+
+function joinBytes(a: Uint8Array, b: Uint8Array): Uint8Array {
+	const joinedBytes = new Uint8Array(a.length+b.length);
+	joinedBytes.set(a);
+	joinedBytes.set(b, a.length);
+	return joinedBytes;
+}
 
 export interface HeaderEncrEvent {
 	type: 'header';

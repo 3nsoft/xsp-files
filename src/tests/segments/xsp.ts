@@ -18,13 +18,10 @@
  * Testing xsp file format functions.
  */
 
-import { getRandom, compare, mockCryptor, objSrcFromArrays, getRandomSync }
-	from '../../test-lib/test-utils';
-import { KEY_LENGTH, NONCE_LENGTH, makeSegmentsReader, makeSegmentsWriter,
-	SegmentsReader, SegmentsWriter, POLY_LENGTH, ObjSource, ByteSource }
-	from '../../lib/index';
+import { getRandom, compare, mockCryptor, objSrcFromArrays, getRandomSync } from '../../test-lib/test-utils';
+import { KEY_LENGTH, NONCE_LENGTH, makeSegmentsReader, makeSegmentsWriter, SegmentsWriter, POLY_LENGTH, ObjSource } from '../../lib/index';
 import { itAsync, beforeEachAsync } from '../../test-lib/async-jasmine';
-import { writerToArray } from '../../test-lib/array-backed-byte-streaming';
+import { packSegments, readSegsSequentially } from '../../test-lib/segments-test-utils';
 
 const cryptor = mockCryptor();
 
@@ -100,83 +97,10 @@ async function testSingleChainHeader(dataLen: number, segSizein256bs: number) {
 
 }
 
-export async function packSegments(writer: SegmentsWriter, data: Uint8Array,
-		baseSegs?: ByteSource): Promise<Uint8Array> {
-	if (writer.hasBase && !baseSegs) { throw new Error(
-		`Source of base segments is not given for packing with writer that has base`); }
-	const { completeArray: segs, writer: arrWriter } = writerToArray();
-	await arrWriter.setSize(writer.segmentsLength);
-	let dataOfs = 0;
-	for (const s of writer.segmentInfos()) {
-		let pos = s.packedOfs;
-		let bytes: Uint8Array;
-		if (s.type === 'base') {
-			expect(s.baseOfs).toBeGreaterThanOrEqual(0);
-			await baseSegs!.seek(s.baseOfs!);
-			bytes = (await baseSegs!.read(s.packedLen))!;
-		} else if (s.type === 'new') {
-			expect(s.needPacking).toBe(true);
-			const dataToPack = data.subarray(dataOfs, dataOfs+s.contentLen);
-			dataOfs += dataToPack.length;
-			if (s.endlessChain) {
-				if (dataToPack.length === 0) { break; }
-				bytes = await writer.packSeg(dataToPack, s);
-				const isLastSeg = (bytes.length < s.packedLen);
-				if (isLastSeg) {
-					await arrWriter.write(pos, bytes);
-					break;
-				}
-			} else {
-				bytes = await writer.packSeg(dataToPack, s);
-			}
-		} else {
-			throw new Error(`Shouldn't get here`);
-		}
-		expect(bytes.length).toBe(s.packedLen);
-		await arrWriter.write(pos, bytes);
-	}
-	expect(writer.areSegmentsPacked).toBeTruthy(
-		`not all segments are packed in ${writer.isEndlessFile ? 'endless' : 'finite'} file`);
-	await arrWriter.done();
-	return await segs;
-}
-
-export async function readSegsSequentially(reader: SegmentsReader,
-		allSegs: Uint8Array): Promise<Uint8Array> {
-	const contentLength = reader.contentLength;
-	const { completeArray: data, writer: arrWriter } = writerToArray();
-	await arrWriter.setSize(contentLength);
-	if (contentLength === undefined) {
-		for (const segInfo of reader.segmentInfos()) {
-			const segBytes = allSegs.subarray(
-				segInfo.packedOfs, segInfo.packedOfs + segInfo.packedLen);
-			if (segBytes.length === 0) { break; }
-			const isLastSeg = (segBytes.length < segInfo.packedLen);
-			const segContent = await reader.openSeg(segInfo, segBytes);
-			if (isLastSeg) {
-				expect(segContent.length).toBeLessThan(segInfo.contentLen);
-			} else {
-				expect(segContent.length).toBe(segInfo.contentLen);
-			}
-			await arrWriter.write(segInfo.contentOfs, segContent);
-			if (isLastSeg) { break; }
-		}
-	} else {
-		for (const segInfo of reader.segmentInfos()) {
-			const segBytes = allSegs.subarray(
-				segInfo.packedOfs, segInfo.packedOfs + segInfo.packedLen);
-			const segContent = await reader.openSeg(segInfo, segBytes);
-			expect(segInfo.contentLen).toBe(segContent.length);
-			await arrWriter.write(segInfo.contentOfs, segContent);
-		}
-	}
-	await arrWriter.done();
-	return await data;
-}
-
-async function packEndlessToFormObjSrc(data: Uint8Array, version: number,
-		segSizein256bs: number, key: Uint8Array, zerothHeaderNonce: Uint8Array):
-		Promise<ObjSource> {
+async function packEndlessToFormObjSrc(
+	data: Uint8Array, version: number, segSizein256bs: number,
+	key: Uint8Array, zerothHeaderNonce: Uint8Array
+): Promise<ObjSource> {
 	const writer = await makeSegmentsWriter(
 		key, zerothHeaderNonce, version,
 		{ type: 'new', segSize: segSizein256bs },
@@ -279,11 +203,11 @@ describe('Packing and reading endless file', () => {
 
 });
 
-async function packAndCheckSplicedBytes(writer: SegmentsWriter, key: Uint8Array,
-		zerothHeaderNonce, baseObj: ObjSource, baseData: Uint8Array,
-		newData: Uint8Array,
-		layout: { src: 'new'|'base'; baseOfs?: number; len: number; }[]):
-		Promise<void> {
+async function packAndCheckSplicedBytes(
+	writer: SegmentsWriter, key: Uint8Array, zerothHeaderNonce: Uint8Array,
+	baseObj: ObjSource, baseData: Uint8Array, newData: Uint8Array,
+	layout: { src: 'new'|'base'; baseOfs?: number; len: number; }[]
+): Promise<void> {
 	// check layout setting, ensuring correct testing
 	{
 		let baseLen = 0;

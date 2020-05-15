@@ -320,13 +320,13 @@ class SegWriter {
 				return packing.index.totalContentLen;
 			},
 			get contentFiniteLength() {
-				return packing.index.finitePartContentLen;
+				return packing.finitePartOfContentLen();
 			},
 			get segmentsLength() {
 				return packing.index.totalSegsLen;
 			},
 			get segmentsFiniteLength() {
-				return packing.index.finitePartSegsLen;
+				return packing.finitePartOfSegmentsLen();
 			},
 			defaultSegSize: packing.index.defaultSegSize,
 			version: this.version,

@@ -82,7 +82,7 @@ class DecryptingByteSource implements ByteSource {
 		}
 
 		const iter = this.segReader.segmentInfos(l);
-		const { done, value } = iter.next();
+		const { done, value } = iter.next() as IteratorResult<SegmentInfo, SegmentInfo>;
 		assert(!done, `Unexpected end of iteration`);
 
 		this.segIter = iter;
@@ -125,14 +125,14 @@ class DecryptingByteSource implements ByteSource {
 		}
 
 		// move to next segments
-		let { done, value: nextSeg } = this.segIter!.next();
+		let { done, value: nextSeg } = this.segIter!.next() as IteratorResult<SegmentInfo, SegmentInfo>;
 		while (!done) {
 			this.seg = nextSeg;
 			this.posInSeg = 0;
 			this.bufferedSeg = await this.readAndDecryptSeg();
 			chunks.push(this.bufferedSeg);
 			this.posInSeg = this.bufferedSeg.length;
-			({ done, value: nextSeg } = this.segIter!.next());
+			({ done, value: nextSeg } = this.segIter!.next()) as IteratorResult<SegmentInfo, SegmentInfo>;
 		}
 
 		return joinByteArrays(chunks);
@@ -163,7 +163,7 @@ class DecryptingByteSource implements ByteSource {
 		}
 
 		// move to next segments
-		let { done, value: nextSeg } = this.segIter!.next();
+		let { done, value: nextSeg } = this.segIter!.next() as IteratorResult<SegmentInfo, SegmentInfo>;
 		while (!done) {
 			this.seg = nextSeg;
 			this.posInSeg = 0;
@@ -181,7 +181,7 @@ class DecryptingByteSource implements ByteSource {
 			}
 
 			if (len > 0) {
-				({ done, value: nextSeg } = this.segIter!.next());
+				({ done, value: nextSeg } = this.segIter!.next() as IteratorResult<SegmentInfo, SegmentInfo>);
 			} else {
 				break;
 			}

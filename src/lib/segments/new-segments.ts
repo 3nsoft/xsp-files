@@ -14,9 +14,11 @@
  You should have received a copy of the GNU General Public License along with
  this program. If not, see <http://www.gnu.org/licenses/>. */
 
-import { SegsChainInfo, MAX_SEG_INDEX } from './xsp-info';
+import { MAX_SEG_INDEX } from './xsp-info';
 import { assert } from '../utils/assert';
 import { writeExc } from './writer';
+
+type ChainInfo =  { isEndless: true; }|{ numOfSegs: number; isEndless?: undefined; };
 
 /**
  * This structure is used in packing info for tracking state of new segment
@@ -38,19 +40,23 @@ export class NewSegments {
 	 */
 	private maxSegIndex: number;
 
-	constructor(chain: SegsChainInfo) {
-		this.maxSegIndex = (chain.isEndless ? MAX_SEG_INDEX : chain.numOfSegs-1);
+	constructor(chainInfo: ChainInfo) {
+		this.maxSegIndex = (chainInfo.isEndless ? MAX_SEG_INDEX : chainInfo.numOfSegs-1);
 		if (!(this.maxSegIndex >= 0)) { throw new Error(
 			`Have an illegal chain with zero segments.`); }
 		this.unpackedSegs = [ [0, this.maxSegIndex] ];
 		Object.seal(this);
 	}
 
-	// Further improvements.
-	// We may allow growing tail in any case, if last segment is not an odd
-	// size.
-	// What sort of indicators should we add to make it so?
-	// Should we channel all chain changes via this object?
+	get indexOfRightmostPackedSeg(): number|undefined {
+		if (this.unpackedSegs.length === 0) { return this.maxSegIndex; }
+		const last = this.unpackedSegs[this.unpackedSegs.length-1];
+		if (last[1] === this.maxSegIndex) {
+			return ((last[0] === 0) ? undefined : (last[0] - 1));
+		} else {
+			return this.maxSegIndex;
+		}
+	}
 
 	canGrowTail(): boolean {
 		if (this.unpackedSegs.length === 0) { return false; }
@@ -68,6 +74,14 @@ export class NewSegments {
 		const last = this.unpackedSegs[this.unpackedSegs.length-1];
 		last[1] = newLastSeg;
 		this.maxSegIndex = newLastSeg;
+	}
+
+	turnIntoEndlessChain(): boolean {
+		if (!this.canGrowTail()) { return false; }
+		this.maxSegIndex = MAX_SEG_INDEX;
+		const last = this.unpackedSegs[this.unpackedSegs.length-1];
+		last[1] = this.maxSegIndex;
+		return true;
 	}
 
 	canCutTail(newLastSeg: number, lastSegPartial: boolean): boolean {

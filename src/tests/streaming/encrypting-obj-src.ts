@@ -21,7 +21,7 @@ import { KEY_LENGTH, NONCE_LENGTH, makeSegmentsWriter, makeSegmentsReader,
 import { mockCryptor, getRandom, compare, toOneArray }
 	from '../../test-lib/test-utils';
 import { sourceFromArray } from '../../test-lib/array-backed-byte-streaming';
-import { readSegsSequentially } from '../segments/xsp';
+import { readSegsSequentially } from '../../test-lib/segments-test-utils';
 
 const cryptor = mockCryptor();
 

@@ -16,11 +16,11 @@
 
 import { getRandom, getRandomSync, mockCryptor }
 	from '../../test-lib/test-utils';
-import { packSegments, readSegsSequentially } from '../segments/xsp';
 import { calculateNonce, NONCE_LENGTH, KEY_LENGTH, compareVectors,
 	makeSegmentsWriter, makeSegmentsReader }
 	from '../../lib/index';
 import { itAsync } from '../../test-lib/async-jasmine';
+import { packSegments, readSegsSequentially } from '../../test-lib/segments-test-utils';
 
 const cryptor = mockCryptor();
 const segSizein256bs = 16;

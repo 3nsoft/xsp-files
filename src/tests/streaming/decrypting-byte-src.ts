@@ -14,12 +14,12 @@
  You should have received a copy of the GNU General Public License along with
  this program. If not, see <http://www.gnu.org/licenses/>. */
 
-import { itAsync, beforeEachAsync, fitAsync } from '../../test-lib/async-jasmine';
+import { itAsync, beforeEachAsync } from '../../test-lib/async-jasmine';
 import { makeSegmentsWriter, NONCE_LENGTH, KEY_LENGTH, makeSegmentsReader, makeDecryptedByteSource, ByteSource, makeDecryptedByteSourceWithAttrs, ByteSourceWithAttrs } from '../../lib/index';
 import { compare, mockCryptor, getRandom, toOneArray } from '../../test-lib/test-utils';
 import { sourceFromArray } from '../../test-lib/array-backed-byte-streaming';
-import { packSegments } from '../segments/xsp';
-import { combineV2Content } from './encrypting-byte-sink';
+import { packSegments } from '../../test-lib/segments-test-utils';
+import { combineV2Content } from '../../test-lib/streams-test-utils';
 
 const cryptor = mockCryptor();
 

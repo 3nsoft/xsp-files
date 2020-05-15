@@ -239,7 +239,7 @@ class EncryptingObjSource implements ObjSource, ByteSource {
 	}
 
 	private advanceSeg(): boolean {
-		const { done, value } = this.segIter.next();
+		const { done, value } = this.segIter.next() as IteratorResult<WritableSegmentInfo, WritableSegmentInfo>;
 		if (done) {
 			return false; }
 		this.seg = value;
@@ -325,7 +325,7 @@ class EncryptingObjSource implements ObjSource, ByteSource {
 			if (offset === 0) { return; }
 			const lastSeg = this.segWriter.locateContentOfs(offset-1);
 			this.segIter = this.segWriter.segmentInfos(lastSeg);
-			({ value: this.seg } = this.segIter.next());
+			({ value: this.seg } = this.segIter.next() as IteratorResult<WritableSegmentInfo, WritableSegmentInfo>);
 			this.posInSeg = this.seg!.packedLen;
 			this.bufferedSeg = undefined;
 			return;
@@ -350,7 +350,7 @@ class EncryptingObjSource implements ObjSource, ByteSource {
 
 		const segLoc = this.segWriter.locateSegsOfs(offset);
 		this.segIter = this.segWriter.segmentInfos(segLoc);
-		({ value: this.seg } = this.segIter.next());
+		({ value: this.seg } = this.segIter.next() as IteratorResult<WritableSegmentInfo, WritableSegmentInfo>);
 		this.posInSeg = segLoc.posInSeg;
 		this.bufferedSeg = undefined;
 		await this.byteSrc.seek(this.seg!.packedOfs);
