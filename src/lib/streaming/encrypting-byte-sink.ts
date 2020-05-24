@@ -713,38 +713,43 @@ export function makeEncryptingByteSink(
 
 class EncryptingByteSinkWithAttrs {
 
-	private attrSize: number|undefined = undefined;
+	private attrSize: number|undefined;
 	private attrSizeSetInThisVersion = false;
-	private contentSize: number|undefined = undefined;
+	private contentSize: number|undefined;
 
 	private constructor(
-		private readonly mainSink: ByteSink
+		private readonly mainSink: ByteSink,
+		private readonly baseAttrSize: number|undefined,
+		segWriter: SegmentsWriter
 	) {
-		Object.seal(this);
-	}
-
-	private init(
-		segWriter: SegmentsWriter, baseAttrSize: number|undefined
-	): void {
-		if (!segWriter.hasBase) { return; }
-		if (baseAttrSize === undefined) { throw new Error(
-			`Writer has base, but base attributes size is not given`); }
-		if (!Number.isInteger(baseAttrSize)
-		|| (baseAttrSize < 0)) { throw new Error (
-			`Given invalid base attrs size: ${baseAttrSize}`); }
-		this.attrSize = baseAttrSize;
-		if (segWriter.contentLength !== undefined) {
-			this.contentSize = segWriter.contentLength - (
-				(this.attrSize === 0) ? 0 : 4+this.attrSize);
-			if (this.contentSize < 0) { throw new Error(
-				`Given base attributes' size implies negative content size`); }
+		if (segWriter.hasBase) {
+			if (this.baseAttrSize === undefined) { throw new Error(
+				`Writer has base, but base attributes size is not given`); }
+			if (!Number.isInteger(this.baseAttrSize)
+			|| (this.baseAttrSize < 0)) { throw new Error (
+				`Given invalid base attrs size: ${this.baseAttrSize}`); }
+			this.attrSize = this.baseAttrSize;
+			if (segWriter.contentLength !== undefined) {
+				this.contentSize = segWriter.contentLength - (
+					(this.attrSize === 0) ? 0 : 4+this.attrSize);
+				if (this.contentSize < 0) { throw new Error(
+					`Given base attributes' size implies negative content size`); }
+			}
+		} else {
+			if (baseAttrSize !== undefined) { throw new Error(
+				`Base attributes size is given, when writer has no base`); }
+			this.attrSize = undefined;
+			this.contentSize = undefined;
 		}
+		Object.seal(this);
 	}
 
 	static makeFor(
 		segWriter: SegmentsWriter, baseAttrSize: number|undefined
 	): { sink: ByteSinkWithAttrs; sub: Subscribe; } {
 		const { sink: mainSink, sub } = EncryptingByteSink.makeFor(segWriter);
+		const s = new EncryptingByteSinkWithAttrs(
+			mainSink, baseAttrSize, segWriter);
 		// Note about synchronization:
 		// a) mainSink's methods are synchronized.
 		// b) Methods of this class only change values of input parameters that
@@ -756,18 +761,16 @@ class EncryptingByteSinkWithAttrs {
 		// This will ensure ordered changes to state in wrap and in mainSink.
 		// If few mainSink calls are done, only the first call will be
 		// synchronized relative to other methods.
-		const wrap = new EncryptingByteSinkWithAttrs(mainSink);
-		wrap.init(segWriter, baseAttrSize);
 		const sink: ByteSinkWithAttrs = {
-			getSize: wrap.getSize.bind(wrap),
-			setSize: wrap.setSize.bind(wrap),
-			showLayout: mainSink.showLayout,
-			spliceLayout: wrap.spliceLayout.bind(wrap),
-			freezeLayout: wrap.freezeLayout.bind(wrap),
-			write: wrap.write.bind(wrap),
-			done: wrap.done.bind(wrap),
-			setAttrSectionSize: wrap.setAttrSectionSize.bind(wrap),
-			writeAttrs: wrap.writeAttrs.bind(wrap)
+			getSize: s.getSize.bind(s),
+			setSize: s.setSize.bind(s),
+			showLayout: s.showLayout.bind(s),
+			spliceLayout: s.spliceLayout.bind(s),
+			freezeLayout: s.freezeLayout.bind(s),
+			write: s.write.bind(s),
+			done: s.done.bind(s),
+			setAttrSectionSize: s.setAttrSectionSize.bind(s),
+			writeAttrs: s.writeAttrs.bind(s)
 		};
 		return { sink, sub };
 	}
@@ -806,6 +809,40 @@ class EncryptingByteSinkWithAttrs {
 		const { isEndless, size } = await this.mainSink.getSize();
 		const attrSize = (typeof this.attrSize === 'number') ? this.attrSize : 0;
 		return { size: Math.max(0, size - 4 - attrSize), isEndless };
+	}
+
+	async showLayout(): Promise<Layout> {
+		const l = await this.mainSink.showLayout();
+		const attrShift = ((this.attrSize === undefined) ?
+			undefined : 4 + this.attrSize);
+		const baseShift = ((this.baseAttrSize === undefined) ?
+			undefined : 4 + this.baseAttrSize);
+		for (let i=0; i<l.sections.length; i+=1) {
+			const s = l.sections[i];
+			if ((s.src === 'base') && (baseShift !== undefined)) {
+				if (s.baseOfs <= baseShift) {
+					s.baseOfs = 0;
+				} else {
+					s.baseOfs -= baseShift;
+				}
+			}
+			if (attrShift === undefined) { continue; }
+			if (s.ofs <= attrShift) {
+				if (s.len === undefined) {
+					s.ofs = 0;
+				} else if ((s.ofs + s.len) <= attrShift) {
+					l.sections.splice(i, 1);
+					i -= 1;
+				} else {
+					const delta = attrShift - s.ofs;
+					s.ofs = 0;
+					s.len -= delta;
+				}
+			} else {
+				s.ofs -= attrShift;
+			}
+		}
+		return l;
 	}
 
 	async setSize(size: number | undefined): Promise<void> {
