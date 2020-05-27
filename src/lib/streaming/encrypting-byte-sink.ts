@@ -105,14 +105,16 @@ class EncryptingByteSink implements ByteSink {
 			&& Number.isInteger(ins) && (ins >= 0), `Invalid parameters given`);
 		await this.segWriter.splice(pos, del, ins);
 		this.buffer.splice(pos, del, ins);
+		if ((pos + del) >= this.biggestContentOfs) {
+			this.biggestContentOfs = Math.max(0, pos + ins);
+		} else {
+			this.biggestContentOfs = Math.max(0, this.biggestContentOfs - del +ins);
+		}
 		if (this.size !== undefined) {
-			this.size = Math.max(0, this.size - del + ins);
+			this.size = this.biggestContentOfs;
 			if (!this.writerFlippedToEndless) {
 				await this.segWriter.setContentLength(undefined);
 				this.writerFlippedToEndless = true;
-			}
-			if (this.biggestContentOfs > this.size) {
-				this.biggestContentOfs = this.size;
 			}
 		}
 	}
@@ -210,9 +212,11 @@ class EncryptingByteSink implements ByteSink {
 			throw err;
 		}
 
-		const endOfs = pos + bytes.length;
-		if (this.biggestContentOfs < endOfs) {
-			this.biggestContentOfs = endOfs;
+		if (this.size === undefined) {
+			const endOfs = pos + bytes.length;
+			if (this.biggestContentOfs < endOfs) {
+				this.biggestContentOfs = endOfs;
+			}
 		}
 	}
 
@@ -367,19 +371,16 @@ class EncryptingByteSink implements ByteSink {
 			this.writerFlippedToEndless = false;
 		} else {
 			this.buffer.cutToSize(this.size);
-			if (this.biggestContentOfs > this.size) {
-				this.biggestContentOfs = this.size;
-			}
+			this.biggestContentOfs = this.size;
 			await this.segWriter.setContentLength(undefined);
 			this.writerFlippedToEndless = true;
 		}
 	}
 
 	async getSize(): Promise<{ size: number; isEndless: boolean; }> {
-		return {
-			isEndless: (this.size === undefined),
-			size: this.segWriter.contentFiniteLength
-		};
+		return ((this.size === undefined) ?
+			{ isEndless: true, size: this.biggestContentOfs } :
+			{ isEndless: false, size: this.size });
 	}
 
 }
@@ -853,9 +854,9 @@ class EncryptingByteSinkWithAttrs {
 		if (!Number.isInteger(size) || (size < 0)) { throw new Error(
 			`Invalid size value ${size}`); }
 		this.contentSize = size;
-		if (this.attrSize !== undefined) {
-			return this.mainSink.setSize(4 + this.attrSize + this.contentSize);
-		}
+		const sinkSize = this.contentSize +
+			((this.attrSize === undefined) ? 0 : 4 + this.attrSize);
+		await this.mainSink.setSize(sinkSize);
 	}
 
 	spliceLayout(pos: number, del: number, ins: number): Promise<void> {

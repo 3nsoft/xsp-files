@@ -14,8 +14,8 @@
  You should have received a copy of the GNU General Public License along with
  this program. If not, see <http://www.gnu.org/licenses/>. */
 
-import { itAsync, beforeEachAsync } from '../../test-lib/async-jasmine';
-import { makeSegmentsWriter, NONCE_LENGTH, KEY_LENGTH, makeSegmentsReader, ByteSink, ObjSource, ByteSinkWithAttrs, LayoutNewSection, LayoutBaseSection } from '../../lib';
+import { itAsync, beforeEachAsync, fitAsync } from '../../test-lib/async-jasmine';
+import { makeSegmentsWriter, NONCE_LENGTH, KEY_LENGTH, makeSegmentsReader, ByteSink, ObjSource, ByteSinkWithAttrs, LayoutNewSection, LayoutBaseSection, Layout } from '../../lib';
 import { mockCryptor, getRandom, compare, objSrcFromArrays } from '../../test-lib/test-utils';
 import { readSegsSequentially, packSegments } from '../../test-lib/segments-test-utils';
 import { makeStreamSink, makeStreamSinkWithAttrs, compareContentAndAttrs, packAttrsAndConentAsObjSource } from '../../test-lib/streams-test-utils';
@@ -38,31 +38,41 @@ async function compareContent(
 type LayoutSection = LayoutBaseSection|LayoutNewSection;
 
 function expectSection(
-	section: LayoutSection, src: LayoutSection['src'], ofs: number,
-	len: number, baseOfs?: number
+	l: Layout, sectionInd: number, src: LayoutSection['src'],
+	ofs: number, len: number|undefined, baseOfs?: number
 ): void {
 	if (typeof baseOfs === 'number') { assert(
 		src === 'base', 'baseOfs should be present in check of base section'); }
 	if (src === 'base') { assert(
 		typeof baseOfs === 'number', 'check of base needs baseOfs'); }
-	expect(section.src).toBe(src, 'wrong section source');
-	expect(section.ofs).toBe(ofs, 'wrong section offset');
-	expect(section.len).toBe(len, 'wrong section length');
-	if (typeof baseOfs === 'number') { 
-		expect((section as LayoutBaseSection).baseOfs).toBe(baseOfs, 'wrong base offset');
+	const section = l.sections[sectionInd];
+	if (section) {
+		expect(section.src).toBe(src, `wrong source in section ${sectionInd}`);
+		expect(section.ofs).toBe(ofs, `wrong offset in section ${sectionInd}`);
+		expect(section.len).toBe(len, `wrong length in section ${sectionInd}`);
+		if (typeof baseOfs === 'number') { 
+			expect((section as LayoutBaseSection).baseOfs).toBe(baseOfs, 'wrong base offset');
+		} else {
+			expect((section as LayoutBaseSection).baseOfs).toBeUndefined('expect no base offset');
+		}
 	} else {
-		expect((section as LayoutBaseSection).baseOfs).toBeUndefined('expect no base offset');
+		fail(`section index ${sectionInd} is not in layout with ${l.sections.length} sections`);
 	}
 }
 
 async function checkAllNewBytesLayout(
-	sink: ByteSink, expectedSize: number
+	sink: ByteSink, expectedSize: number|undefined
 ): Promise<void> {
-	const size = (await sink.getSize()).size;
-	expect(size).toBe(expectedSize);
+	const sizeInfo = await sink.getSize();
+	if (expectedSize === undefined) {
+		expect(sizeInfo.isEndless).toBeTruthy(`sink endless flag in endless sink`);
+	} else {
+		expect(sizeInfo.isEndless).toBeFalsy(`sink endless flag in finite sink`);
+		expect(sizeInfo.size).toBe(expectedSize, `finite sink size`);
+	}
 	const layout = await sink.showLayout();
-	expect(layout.sections.length).toBe(1);
-	expectSection(layout.sections[0], 'new', 0, size);
+	expect(layout.sections.length).toBe(1, `number of sections in all new bytes layout`);
+	expectSection(layout, 0, 'new', 0, expectedSize);
 }
 
 describe(`Encrypting byte sink (underlying version format 1)`, () => {
@@ -106,7 +116,7 @@ describe(`Encrypting byte sink (underlying version format 1)`, () => {
 			expect(layout.sections.length).toBe(0);
 		} else {
 			expect(layout.sections.length).toBe(1);
-			expectSection(layout.sections[0], 'new', 0, size);
+			expectSection(layout, 0, 'new', 0, size);
 		}
 
 		const { header, allSegs } = await completion;
@@ -197,9 +207,9 @@ describe(`Encrypting byte sink (underlying version format 1)`, () => {
 		const layout = await byteSink.showLayout();
 		expect(layout.base).toBe(baseSrc.version);
 		expect(layout.sections.length).toBe(3);
-		expectSection(layout.sections[0], 'base', 0, cut1.ofs, 0);
-		expectSection(layout.sections[1], 'new', cut1.ofs, cut1.ins.length);
-		expectSection(layout.sections[2], 'base',
+		expectSection(layout, 0, 'base', 0, cut1.ofs, 0);
+		expectSection(layout, 1, 'new', cut1.ofs, cut1.ins.length);
+		expectSection(layout, 2, 'base',
 			cut1.ofs + cut1.ins.length, size - (cut1.ofs + cut1.ins.length),
 			cut1.ofs + cut1.del);
 
@@ -285,9 +295,9 @@ describe(`Encrypting byte sink (underlying version format 1)`, () => {
 		expect(size).toBe(expectedContent.length);
 		const layout = await byteSink.showLayout();
 		expect(layout.sections.length).toBe(3);
-		expectSection(layout.sections[0], 'base', 0, cut1.ofs, 0);
-		expectSection(layout.sections[1], 'new', cut1.ofs, cut1.ins.length);
-		expectSection(layout.sections[2], 'base',
+		expectSection(layout, 0, 'base', 0, cut1.ofs, 0);
+		expectSection(layout, 1, 'new', cut1.ofs, cut1.ins.length);
+		expectSection(layout, 2, 'base',
 			cut1.ofs + cut1.ins.length, size - (cut1.ofs + cut1.ins.length),
 			cut1.ofs + cut1.del);
 
@@ -413,6 +423,77 @@ describe(`Encrypting byte sink with attributes (underlying version format 2)`, (
 			key, zerothNonce, version, completion, content, attrs, cryptor);
 	});
 
+	itAsync(`splices new empty content`, async () => {
+		const content = await getRandom((4*4 + 2)*1024);
+		const attrs = await getRandom(25);
+		const expectedContent = new Uint8Array(2*content.length);
+		const sndWritePos = content.length;
+		expectedContent.set(content, 0);
+		expectedContent.set(content, sndWritePos);
+
+		const { byteSink, completion } = await makeSink();
+
+		const initSizeInfo = await byteSink.getSize();
+		expect(initSizeInfo.isEndless).toBeTruthy();
+
+		await byteSink.setAttrSectionSize(attrs.length);
+
+		await byteSink.spliceLayout(0, content.length, content.length);
+		await checkAllNewBytesLayout(byteSink, undefined);
+
+		await byteSink.setSize(sndWritePos);
+		await checkAllNewBytesLayout(byteSink, sndWritePos);
+		await byteSink.write(0, content);
+
+		await byteSink.spliceLayout(sndWritePos, content.length, content.length);
+		await checkAllNewBytesLayout(byteSink, sndWritePos + content.length);
+
+		await byteSink.write(sndWritePos, content);
+
+		await byteSink.writeAttrs(attrs);
+		await byteSink.done();
+
+		await compareContentAndAttrs(
+			key, zerothNonce, version, completion, expectedContent, attrs,
+			cryptor);
+	});
+
+	itAsync(`splices new empty content (#2, start with finite)`, async () => {
+		const content = await getRandom((4*4 + 2)*1024);
+		const attrs = await getRandom(25);
+		const expectedContent = new Uint8Array(2*content.length);
+		const sndWritePos = content.length;
+		expectedContent.set(content, 0);
+		expectedContent.set(content, sndWritePos);
+
+		const { byteSink, completion } = await makeSink();
+
+		await byteSink.setSize(0);
+
+		const initSizeInfo = await byteSink.getSize();
+		expect(initSizeInfo.isEndless).toBeFalsy();
+		expect(initSizeInfo.size).toBe(0);
+
+		await byteSink.setAttrSectionSize(attrs.length);
+
+		await byteSink.spliceLayout(0, content.length, content.length);
+		await checkAllNewBytesLayout(byteSink, content.length);
+
+		await byteSink.write(0, content);
+
+		await byteSink.spliceLayout(sndWritePos, content.length, content.length);
+		await checkAllNewBytesLayout(byteSink, sndWritePos + content.length);
+
+		await byteSink.write(sndWritePos, content);
+
+		await byteSink.writeAttrs(attrs);
+		await byteSink.done();
+
+		await compareContentAndAttrs(
+			key, zerothNonce, version, completion, expectedContent, attrs,
+			cryptor);
+	});
+
 	function prepAsBase(
 		attrs: Uint8Array, content: Uint8Array
 	): Promise<ObjSource> {
@@ -450,9 +531,9 @@ describe(`Encrypting byte sink with attributes (underlying version format 2)`, (
 		const layout = await byteSink.showLayout();
 		expect(layout.base).toBe(baseSrc.version);
 		expect(layout.sections.length).toBe(3);
-		expectSection(layout.sections[0], 'base', 0, cut1.ofs, 0);
-		expectSection(layout.sections[1], 'new', cut1.ofs, cut1.ins.length);
-		expectSection(layout.sections[2], 'base',
+		expectSection(layout, 0, 'base', 0, cut1.ofs, 0);
+		expectSection(layout, 1, 'new', cut1.ofs, cut1.ins.length);
+		expectSection(layout, 2, 'base',
 			cut1.ofs + cut1.ins.length, size - (cut1.ofs + cut1.ins.length),
 			cut1.ofs + cut1.del);
 
@@ -491,9 +572,9 @@ describe(`Encrypting byte sink with attributes (underlying version format 2)`, (
 		expect(size).toBe(expectedContent.length);
 		const layout = await byteSink.showLayout();
 		expect(layout.sections.length).toBe(3);
-		expectSection(layout.sections[0], 'base', 0, cut1.ofs, 0);
-		expectSection(layout.sections[1], 'new', cut1.ofs, cut1.ins.length);
-		expectSection(layout.sections[2], 'base',
+		expectSection(layout, 0, 'base', 0, cut1.ofs, 0);
+		expectSection(layout, 1, 'new', cut1.ofs, cut1.ins.length);
+		expectSection(layout, 2, 'base',
 			cut1.ofs + cut1.ins.length, size - (cut1.ofs + cut1.ins.length),
 			cut1.ofs + cut1.del);
 
@@ -534,9 +615,9 @@ describe(`Encrypting byte sink with attributes (underlying version format 2)`, (
 		expect(size).toBe(expectedContent.length);
 		const layout = await byteSink.showLayout();
 		expect(layout.sections.length).toBe(3);
-		expectSection(layout.sections[0], 'base', 0, cut1.ofs, 0);
-		expectSection(layout.sections[1], 'new', cut1.ofs, cut1.ins.length);
-		expectSection(layout.sections[2], 'base',
+		expectSection(layout, 0, 'base', 0, cut1.ofs, 0);
+		expectSection(layout, 1, 'new', cut1.ofs, cut1.ins.length);
+		expectSection(layout, 2, 'base',
 			cut1.ofs + cut1.ins.length, size - (cut1.ofs + cut1.ins.length),
 			cut1.ofs + cut1.del);
 
