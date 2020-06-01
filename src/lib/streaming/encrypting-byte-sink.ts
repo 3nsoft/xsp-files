@@ -264,18 +264,25 @@ class EncryptingByteSink implements ByteSink {
 			if (fstSeg.type === 'base') { throw writeExc('segsPacked',
 				`Given bytes overlap base bytes`); }
 			if (!fstSeg.needPacking) { throw writeExc('segsPacked'); }
-			const posOfsInSeg = ((fstSeg.headBytes === undefined) ?
-				pos.posInSeg : (pos.posInSeg - fstSeg.headBytes));
-			if (posOfsInSeg < 0) { throw writeExc('segsPacked',
+
+			// fstSeg parameters, corrected for presence of head (base)
+			const ofsInFstSeg = pos.posInSeg - (fstSeg.headBytes ?
+				fstSeg.headBytes : 0);
+			const fstSegStart = fstSeg.contentOfs +
+				(fstSeg.headBytes ? fstSeg.headBytes : 0);
+			const fstSegEnd = fstSeg.contentOfs +
+				(fstSeg.headBytes ? fstSeg.headBytes : 0) + fstSeg.contentLen;
+
+			if (ofsInFstSeg < 0) { throw writeExc('segsPacked',
 				`Given bytes overlap base bytes`); }
 
-			if (posOfsInSeg === 0) {
+			if (ofsInFstSeg === 0) {
 				if (bytes.length < fstSeg.contentLen) {
-					const tailStart = fstSeg.contentOfs + bytes.length;
-					const tailEnd = fstSeg.contentOfs + fstSeg.contentLen;
-					const tailBytes = this.buffer.findAndExtract(tailStart, tailEnd);
+					const tailStart = fstSegStart + bytes.length;
+					const tailBytes = this.buffer.findAndExtract(
+						tailStart, fstSegEnd);
 					if (!tailBytes) {
-						this.buffer.add(fstSeg.contentOfs, bytes);
+						this.buffer.add(fstSegStart, bytes);
 						return wholeSegs;
 					}
 					const wholeSeg = new Uint8Array(fstSeg.contentLen);
@@ -289,42 +296,42 @@ class EncryptingByteSink implements ByteSink {
 				bytes = bytes.subarray(wholeSeg.length);
 				wholeSegs.push([ fstSeg, wholeSeg ]);
 			} else {
-				const headStart = fstSeg.contentOfs;
-				const headEnd = fstSeg.contentOfs + posOfsInSeg;
-				const headChunk = this.buffer.findChunkWith(headStart, headEnd);
+				// const headStart = fstSeg.contentOfs;
+				const headEnd = fstSegStart + ofsInFstSeg;
+				const headChunk = this.buffer.findChunkWith(fstSegStart, headEnd);
 
-				if ((posOfsInSeg + bytes.length) < fstSeg.contentLen) {
-					const tailStart = fstSeg.contentOfs + posOfsInSeg + bytes.length;
-					const tailEnd = fstSeg.contentOfs + fstSeg.contentLen;
-					const tailChunk = this.buffer.findChunkWith(tailStart, tailEnd);
+				if ((ofsInFstSeg + bytes.length) < fstSeg.contentLen) {
+					const tailStart = headEnd + bytes.length;
+					const tailChunk = this.buffer.findChunkWith(
+						tailStart, fstSegEnd);
 					if (!headChunk || !tailChunk) {
-						this.buffer.add(fstSeg.contentOfs+posOfsInSeg, bytes);
+						this.buffer.add(headEnd, bytes);
 						return wholeSegs;
 					}
 					const wholeSeg = new Uint8Array(fstSeg.contentLen);
 					const headBytes = this.buffer.extractBytesFrom(
-						headChunk, headStart, headEnd);
+						headChunk, fstSegStart, headEnd);
 					wholeSeg.set(headBytes);
-					wholeSeg.set(bytes, posOfsInSeg);
+					wholeSeg.set(bytes, headBytes.length);
 					const tailBytes = this.buffer.extractBytesFrom(
-						tailChunk, tailStart, tailEnd);
-					wholeSeg.set(tailBytes, posOfsInSeg+bytes.length);
+						tailChunk, tailStart, fstSegEnd);
+					wholeSeg.set(tailBytes, headBytes.length+bytes.length);
 					wholeSegs.push([ fstSeg, wholeSeg ]);
 					return wholeSegs;
 				}
 
 				const oddFstChunk = bytes.subarray(
-					0, fstSeg.contentLen-posOfsInSeg);
+					0, fstSeg.contentLen-ofsInFstSeg);
 				bytes = bytes.subarray(oddFstChunk.length);
 				if (headChunk) {
 					const wholeSeg = new Uint8Array(fstSeg.contentLen);
 					const headBytes = this.buffer.extractBytesFrom(
-						headChunk, headStart, headEnd);
+						headChunk, fstSegStart, headEnd);
 					wholeSeg.set(headBytes);
-					wholeSeg.set(oddFstChunk, posOfsInSeg);
+					wholeSeg.set(oddFstChunk, headBytes.length);
 					wholeSegs.push([ fstSeg, wholeSeg ]);
 				} else {
-					this.buffer.add(fstSeg.contentOfs+posOfsInSeg, oddFstChunk);
+					this.buffer.add(headEnd, oddFstChunk);
 				}
 			}
 		}
@@ -781,18 +788,11 @@ class EncryptingByteSinkWithAttrs {
 			`Invalid size value ${size}`); }
 		if (this.attrSizeSetInThisVersion) { throw new Error(
 			`Attributes' section size is already set`); }
+		const del = (this.attrSize ? 4 + this.attrSize : 0);
+		this.attrSize = size;
+		const ins = 4 + this.attrSize;
 		this.attrSizeSetInThisVersion = true;
-		if (this.attrSize === undefined) {
-			this.attrSize = size;
-			if (this.contentSize !== undefined) {
-				await this.mainSink.setSize(4 + this.attrSize + this.contentSize);
-			}
-		} else {
-			const del = ((this.attrSize === 0) ? 0 : 4 + this.attrSize);
-			this.attrSize = size;
-			const ins = 4 + this.attrSize;
-			await this.mainSink.spliceLayout(0, del, ins);
-		}
+		await this.mainSink.spliceLayout(0, del, ins);
 		await this.mainSink.write(0, packUintToBytes(this.attrSize));
 	}
 

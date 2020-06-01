@@ -308,6 +308,10 @@ export class PackingInfo {
 		delete last.isEndless;
 		(last as FiniteSegsChainInfo).numOfSegs = lastSegId.seg + 1;
 		(last as FiniteSegsChainInfo).lastSegSize = lastSegLen;
+		if ((last.type === 'new') && last.headBytes
+		&& (lastSegId.seg === 0) && (last.headBytes.len > lastSegLen)) {
+			last.headBytes.len = lastSegLen;
+		}
 
 		this.index.update();
 	}
@@ -605,7 +609,7 @@ export class PackingInfo {
 			const headBytes: BaseBytesInfo = {
 				baseSeg: {
 					ofs: c.baseOfs + (c.numOfSegs-1)*(this.segs.segSize+POLY_LENGTH),
-					contentOfs: c.baseOfs + (c.numOfSegs-1)*this.segs.segSize,
+					contentOfs: c.baseContentOfs + (c.numOfSegs-1)*this.segs.segSize,
 					len: c.lastSegSize+POLY_LENGTH,
 					nonce: calculateNonce(c.nonce, c.numOfSegs-1)
 				},

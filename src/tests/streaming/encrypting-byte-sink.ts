@@ -14,26 +14,15 @@
  You should have received a copy of the GNU General Public License along with
  this program. If not, see <http://www.gnu.org/licenses/>. */
 
-import { itAsync, beforeEachAsync, fitAsync } from '../../test-lib/async-jasmine';
+import { itAsync, beforeEachAsync } from '../../test-lib/async-jasmine';
 import { makeSegmentsWriter, NONCE_LENGTH, KEY_LENGTH, makeSegmentsReader, ByteSink, ObjSource, ByteSinkWithAttrs, LayoutNewSection, LayoutBaseSection, Layout } from '../../lib';
 import { mockCryptor, getRandom, compare, objSrcFromArrays } from '../../test-lib/test-utils';
 import { readSegsSequentially, packSegments } from '../../test-lib/segments-test-utils';
-import { makeStreamSink, makeStreamSinkWithAttrs, compareContentAndAttrs, packAttrsAndConentAsObjSource } from '../../test-lib/streams-test-utils';
+import { makeStreamSink, makeStreamSinkWithAttrs, compareContentAndAttrs, packAttrsAndConentAsObjSource, compareContent } from '../../test-lib/streams-test-utils';
 import { assert } from '../../lib/utils/assert';
+import { joinByteArrs } from '../../test-lib/buffer-utils';
 
 const cryptor = mockCryptor();
-
-async function compareContent(
-	key: Uint8Array, zerothNonce: Uint8Array, version: number,
-	completion: Promise<{ header: Uint8Array; allSegs: Uint8Array; }>,
-	expectation: Uint8Array
-): Promise<void> {
-	const { header, allSegs } = await completion;
-	const segReader = await makeSegmentsReader(
-		key, zerothNonce, version, header, cryptor);
-	const decrContent = await readSegsSequentially(segReader, allSegs);
-	compare(decrContent, expectation);
-}
 
 type LayoutSection = LayoutBaseSection|LayoutNewSection;
 
@@ -165,7 +154,8 @@ describe(`Encrypting byte sink (underlying version format 1)`, () => {
 
 		await checkAllNewBytesLayout(byteSink, content.length);
 
-		await compareContent(key, zerothNonce, version, completion, content);
+		await compareContent(
+			key, zerothNonce, version, completion, content, cryptor);
 	});
 
 	async function prepAsBase(content: Uint8Array): Promise<ObjSource> {
@@ -213,7 +203,8 @@ describe(`Encrypting byte sink (underlying version format 1)`, () => {
 			cut1.ofs + cut1.ins.length, size - (cut1.ofs + cut1.ins.length),
 			cut1.ofs + cut1.del);
 
-		await compareContent(key, zerothNonce, version, completion, expectedContent);
+		await compareContent(
+			key, zerothNonce, version, completion, expectedContent, cryptor);
 	});
 
 	itAsync(`splices base in few places and writes new bytes`, async () => {
@@ -262,7 +253,8 @@ describe(`Encrypting byte sink (underlying version format 1)`, () => {
 		await byteSink.write(cut1.ofs, cut1.ins);
 		await byteSink.done();
 
-		await compareContent(key, zerothNonce, version, completion, expectedContent);
+		await compareContent(
+			key, zerothNonce, version, completion, expectedContent, cryptor);
 	});
 
 	itAsync(`splices base version, freezes layout and writes new bytes`, async () => {
@@ -301,7 +293,8 @@ describe(`Encrypting byte sink (underlying version format 1)`, () => {
 			cut1.ofs + cut1.ins.length, size - (cut1.ofs + cut1.ins.length),
 			cut1.ofs + cut1.del);
 
-		await compareContent(key, zerothNonce, version, completion, expectedContent);
+		await compareContent(
+			key, zerothNonce, version, completion, expectedContent, cryptor);
 	});
 
 	itAsync(`splices base in few places, freezes layout and writes new bytes`, async () => {
@@ -353,7 +346,101 @@ describe(`Encrypting byte sink (underlying version format 1)`, () => {
 		await byteSink.write(cut1.ofs, cut1.ins);
 		await byteSink.done();
 
-		await compareContent(key, zerothNonce, version, completion, expectedContent);
+		await compareContent(
+			key, zerothNonce, version, completion, expectedContent, cryptor);
+	});
+
+	itAsync(`splices base like sink with attrs does`, async () => {
+		const baseBytes = await getRandom(10000);
+		const baseSrc = await prepAsBase(baseBytes);
+
+		const { byteSink, completion } = await makeSink(baseSrc);
+
+		let layout = await byteSink.showLayout();
+		expect(layout.sections.length).toBe(1);
+		expectSection(layout, 0, 'base', 0, 10000, 0);
+
+		const initChunk = await getRandom(30);
+
+		await byteSink.spliceLayout(0, 30, 30);
+		await byteSink.write(0, initChunk.subarray(0, 5));
+
+		layout = await byteSink.showLayout();
+		expect(layout.sections.length).toBe(2);
+		expectSection(layout, 0, 'new', 0, 30);
+		expectSection(layout, 1, 'base', 30, 9970, 30);
+
+		await byteSink.setSize(9100);
+
+		layout = await byteSink.showLayout();
+		expect(layout.sections.length).toBe(2);
+		expectSection(layout, 0, 'new', 0, 30);
+		expectSection(layout, 1, 'base', 30, 9070, 30);
+
+		await byteSink.write(5, initChunk.subarray(5));
+		await byteSink.done();
+
+		const expectedContent = joinByteArrs([
+			initChunk, baseBytes.subarray(30, 9100)
+		]);
+		await compareContent(
+			key, zerothNonce, version, completion, expectedContent, cryptor);
+	});
+
+	itAsync(`supports file sink use pattern (scenario 1)`, async () => {
+
+		const chunk1 = await getRandom(10000);
+		const chunk2 = await getRandom(100);
+		const tail1 = await getRandom(56);
+
+		const { byteSink: s1, completion: c1 } = await makeSink();
+
+		await s1.setSize(0);
+		await s1.spliceLayout(0, 10000, 10000);
+		await s1.write(0, chunk1);
+		expect((await s1.getSize()).size).toBe(10000, 'content length');
+		await s1.spliceLayout(10000, 100, 100);
+		await s1.write(10000, chunk2);
+		expect((await s1.getSize()).size).toBe(10100, 'content length');
+		await s1.setSize(10156);
+		await s1.write(10100, tail1);
+		await s1.done();
+
+		const expectedContent1 = joinByteArrs([ chunk1, chunk2, tail1 ]);
+		await compareContent(
+			key, zerothNonce, version, c1, expectedContent1, cryptor);
+
+		const baseForS2 = await prepAsBase(expectedContent1);
+		const { byteSink: s2, completion: c2 } = await makeSink(baseForS2);
+
+		const tail2 = await getRandom(72);
+
+		expect((await s2.getSize()).size).toBe(10156, 'initial content length');
+		await s2.setSize(10100);
+		expect((await s2.getSize()).size).toBe(10100, 'content length after tail cut');
+		await s2.spliceLayout(5000, 4000, 0);
+		expect((await s2.getSize()).size).toBe(6100, 'content length after middle cut');
+
+		let layout = await s2.showLayout();
+		expect(layout.sections.length).toBe(2);
+		expectSection(layout, 0, 'base', 0, 5000, 0);
+		expectSection(layout, 1, 'base', 5000, 1100, 9000);
+	
+		await s2.setSize(6172);
+		layout = await s2.showLayout();
+		expect(layout.sections.length).toBe(3);
+		expectSection(layout, 0, 'base', 0, 5000, 0);
+		expectSection(layout, 1, 'base', 5000, 1100, 9000);
+		expectSection(layout, 2, 'new', 6100, 72);
+
+		await s2.write(6100, tail2);
+		await s2.done();
+
+		const expectedContent2 = joinByteArrs([
+			chunk1.subarray(0, 5000), chunk1.subarray(9000), chunk2, tail2
+		]);
+		await compareContent(
+			key, zerothNonce, version, c2, expectedContent2, cryptor);
 	});
 
 });
@@ -623,6 +710,79 @@ describe(`Encrypting byte sink with attributes (underlying version format 2)`, (
 
 		await compareContentAndAttrs(
 			key, zerothNonce, version, completion, expectedContent, attrs,
+			cryptor);
+	});
+
+	itAsync(`supports file sink use pattern (scenario 1)`, async () => {
+
+		const attrs = await getRandom(21);
+		const chunk1 = await getRandom(10000);
+		const chunk2 = await getRandom(100);
+		const tail1 = await getRandom(56);
+
+		const { byteSink: s1, completion: c1 } = await makeSink();
+
+		await s1.setAttrSectionSize(21);
+		await s1.setSize(0);
+		await s1.spliceLayout(0, 10000, 10000);
+		await s1.write(0, chunk1);
+		expect((await s1.getSize()).size).toBe(10000, 'content length');
+		await s1.spliceLayout(10000, 100, 100);
+		await s1.write(10000, chunk2);
+		expect((await s1.getSize()).size).toBe(10100, 'content length');
+		await s1.setSize(10156);
+		await s1.write(10100, tail1);
+		await s1.writeAttrs(attrs);
+		await s1.done();
+
+		const expectedContent1 = joinByteArrs([ chunk1, chunk2, tail1 ]);
+		await compareContentAndAttrs(
+			key, zerothNonce, version, c1, expectedContent1, attrs,
+			cryptor);
+
+		const baseForS2 = await prepAsBase(attrs, expectedContent1);
+		const { byteSink: s2, completion: c2 } = await makeSink(baseForS2, 21);
+
+		const tail2 = await getRandom(72);
+
+		expect((await s2.getSize()).size).toBe(10156, 'initial content length');
+		await s2.setAttrSectionSize(21);
+		let layout = await s2.showLayout();
+		expect(layout.sections.length).toBe(1);
+		expectSection(layout, 0, 'base', 0, 10156, 0);
+		expect((await s2.getSize()).size).toBe(10156, 'content length after setting attrs length');
+
+		await s2.setSize(10100);
+
+		layout = await s2.showLayout();
+		expect(layout.sections.length).toBe(1);
+		expectSection(layout, 0, 'base', 0, 10100, 0);
+		expect((await s2.getSize()).size).toBe(10100, 'content length after tail cut by setSize');
+
+		await s2.spliceLayout(5000, 4000, 0);
+		expect((await s2.getSize()).size).toBe(6100, 'content length after middle cut');
+
+		layout = await s2.showLayout();
+		expect(layout.sections.length).toBe(2);
+		expectSection(layout, 0, 'base', 0, 5000, 0);
+		expectSection(layout, 1, 'base', 5000, 1100, 9000);
+	
+		await s2.setSize(6172);
+		layout = await s2.showLayout();
+		expect(layout.sections.length).toBe(3);
+		expectSection(layout, 0, 'base', 0, 5000, 0);
+		expectSection(layout, 1, 'base', 5000, 1100, 9000);
+		expectSection(layout, 2, 'new', 6100, 72);
+
+		await s2.write(6100, tail2);
+		await s2.writeAttrs(attrs);
+		await s2.done();
+
+		const expectedContent2 = joinByteArrs([
+			chunk1.subarray(0, 5000), chunk1.subarray(9000), chunk2, tail2
+		]);
+		await compareContentAndAttrs(
+			key, zerothNonce, version, c2, expectedContent2, attrs,
 			cryptor);
 	});
 

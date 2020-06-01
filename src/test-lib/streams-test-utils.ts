@@ -167,6 +167,18 @@ export function combineV2Content(
 	return allBytes;
 }
 
+export async function compareContent(
+	key: Uint8Array, zerothNonce: Uint8Array, version: number,
+	completion: Promise<{ header: Uint8Array; allSegs: Uint8Array; }>,
+	expectation: Uint8Array, cryptor: AsyncSBoxCryptor
+): Promise<void> {
+	const { header, allSegs } = await completion;
+	const segReader = await makeSegmentsReader(
+		key, zerothNonce, version, header, cryptor);
+	const decrContent = await readSegsSequentially(segReader, allSegs);
+	compare(decrContent, expectation);
+}
+
 export async function compareContentAndAttrs(
 	key: Uint8Array, zerothNonce: Uint8Array, version: number,
 	completion: Promise<{ header: Uint8Array; allSegs: Uint8Array; }>,
