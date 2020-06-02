@@ -18,7 +18,7 @@ import { itAsync, beforeEachAsync } from '../../test-lib/async-jasmine';
 import { makeSegmentsWriter, NONCE_LENGTH, KEY_LENGTH, makeSegmentsReader, ByteSink, ObjSource, ByteSinkWithAttrs, LayoutNewSection, LayoutBaseSection, Layout } from '../../lib';
 import { mockCryptor, getRandom, compare, objSrcFromArrays } from '../../test-lib/test-utils';
 import { readSegsSequentially, packSegments } from '../../test-lib/segments-test-utils';
-import { makeStreamSink, makeStreamSinkWithAttrs, compareContentAndAttrs, packAttrsAndConentAsObjSource, compareContent } from '../../test-lib/streams-test-utils';
+import { makeStreamSink, makeStreamSinkWithAttrs, compareContentAndAttrs, packAttrsAndConentAsObjSource, compareContent, packedBytesToSrc } from '../../test-lib/streams-test-utils';
 import { assert } from '../../lib/utils/assert';
 import { joinByteArrs } from '../../test-lib/buffer-utils';
 
@@ -410,7 +410,7 @@ describe(`Encrypting byte sink (underlying version format 1)`, () => {
 		await compareContent(
 			key, zerothNonce, version, c1, expectedContent1, cryptor);
 
-		const baseForS2 = await prepAsBase(expectedContent1);
+		const baseForS2 = await packedBytesToSrc(2, c1);
 		const { byteSink: s2, completion: c2 } = await makeSink(baseForS2);
 
 		const tail2 = await getRandom(72);
@@ -740,7 +740,7 @@ describe(`Encrypting byte sink with attributes (underlying version format 2)`, (
 			key, zerothNonce, version, c1, expectedContent1, attrs,
 			cryptor);
 
-		const baseForS2 = await prepAsBase(attrs, expectedContent1);
+		const baseForS2 = await packedBytesToSrc(2, c1);
 		const { byteSink: s2, completion: c2 } = await makeSink(baseForS2, 21);
 
 		const tail2 = await getRandom(72);
@@ -783,6 +783,37 @@ describe(`Encrypting byte sink with attributes (underlying version format 2)`, (
 		]);
 		await compareContentAndAttrs(
 			key, zerothNonce, version, c2, expectedContent2, attrs,
+			cryptor);
+	});
+
+	itAsync(`supports file sink use pattern (scenario 2)`, async () => {
+
+		const attrs1 = await getRandom(21);
+		const chunk1 = await getRandom(2048);
+
+		const { byteSink: s1, completion: c1 } = await makeSink();
+
+		await s1.writeAttrs(attrs1);
+		await s1.setSize(chunk1.length);
+		await s1.freezeLayout();
+		await s1.write(0, chunk1);
+		await s1.done();
+
+		await compareContentAndAttrs(
+			key, zerothNonce, version, c1, chunk1, attrs1,
+			cryptor);
+
+		const baseForS2 = await packedBytesToSrc(2, c1);
+		const { byteSink: s2, completion: c2 } = await makeSink(baseForS2, 21);
+
+		const attrs2 = await getRandom(attrs1.length);
+
+		await s2.setAttrSectionSize(attrs2.length);
+		await s2.writeAttrs(attrs2);
+		await s2.done();
+
+		await compareContentAndAttrs(
+			key, zerothNonce, version, c2, chunk1, attrs2,
 			cryptor);
 	});
 

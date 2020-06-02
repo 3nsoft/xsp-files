@@ -192,3 +192,11 @@ export async function compareContentAndAttrs(
 	const expectation = combineV2Content(expectedAttrs, expectedContent);
 	compare(decrContent, expectation);
 }
+
+export async function packedBytesToSrc(
+	version: number,
+	packedBytes: Promise<{ header: Uint8Array; allSegs: Uint8Array; }>
+): Promise<ObjSource> {
+	const { header, allSegs } = await packedBytes;
+	return objSrcFromArrays(version, header, allSegs);
+}

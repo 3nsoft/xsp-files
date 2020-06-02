@@ -778,11 +778,11 @@ export class PackingInfo {
 			const c = this.getChain(leftCut.chain);
 			const reencrypted = await this.cutChainHead(
 				c, rightCut.seg, rightCut.posInSeg); // noop for seg=0 & posInSeg=0
-			this.dropChains(chainsToDrop);
 			const left = ((leftCut.chain === 0) ?
 				undefined : this.getChain(leftCut.chain - 1));
 			const right = (reencrypted ?
 				reencrypted : this.getChain(rightCut.chain));
+			this.dropChains(chainsToDrop);
 			return { left, right };
 		}
 		
