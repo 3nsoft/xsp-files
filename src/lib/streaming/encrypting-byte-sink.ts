@@ -78,12 +78,25 @@ class EncryptingByteSink implements ByteSink {
 		if (typeof backpressure === 'function') {
 			this.backpressure = backpressure;
 		}
-		return this.stop.bind(this);
+		return this.stopAndSetCompleted.bind(this);
 	}
 
-	private stop(): void {
+	private stopAndSetCompleted(err?: any): void {
+		if (this.isCompleted) { return; }
 		this.isCompleted = true;
-		this.encOutput = undefined as any;
+		if (this.encOutput) {
+			if (err) {
+				if (this.encOutput.error) { this.encOutput.error(err); }
+			} else {
+				if (this.encOutput.complete) { this.encOutput.complete(); }
+			}
+		}
+		this.encOutput = undefined;
+	}
+
+	private throwUpIfCompletedOrNotSubscribed(): void {
+		if (this.isCompleted) { throw new Error(`This sink has been completed`); }
+		if (!this.encOutput) { throw new Error(`This sink is not subsribed to`); }
 	}
 
 	async showLayout(): Promise<Layout> {
@@ -103,55 +116,65 @@ class EncryptingByteSink implements ByteSink {
 		assert(Number.isInteger(pos) && (pos >= 0)
 			&& Number.isInteger(del) && (del >= 0)
 			&& Number.isInteger(ins) && (ins >= 0), `Invalid parameters given`);
-		await this.segWriter.splice(pos, del, ins);
-		this.buffer.splice(pos, del, ins);
-		if ((pos + del) >= this.biggestContentOfs) {
-			this.biggestContentOfs = Math.max(0, pos + ins);
-		} else {
-			this.biggestContentOfs = Math.max(0, this.biggestContentOfs - del +ins);
-		}
-		if (this.size !== undefined) {
-			this.size = this.biggestContentOfs;
-			if (!this.writerFlippedToEndless) {
-				await this.segWriter.setContentLength(undefined);
-				this.writerFlippedToEndless = true;
+		this.throwUpIfCompletedOrNotSubscribed();
+		try {
+			await this.segWriter.splice(pos, del, ins);
+			this.buffer.splice(pos, del, ins);
+			if ((pos + del) >= this.biggestContentOfs) {
+				this.biggestContentOfs = Math.max(0, pos + ins);
+			} else {
+				this.biggestContentOfs = Math.max(0, this.biggestContentOfs - del +ins);
 			}
+			if (this.size !== undefined) {
+				this.size = this.biggestContentOfs;
+				if (!this.writerFlippedToEndless) {
+					await this.segWriter.setContentLength(undefined);
+					this.writerFlippedToEndless = true;
+				}
+			}
+		} catch (err) {
+			await this.done(err);
+			throw err;
 		}
 	}
 
 	async freezeLayout(): Promise<void> {
+		this.throwUpIfCompletedOrNotSubscribed();
 		if (this.segWriter.isHeaderPacked) { return; }
-		if (!this.encOutput) { throw new Error(`This sink is not subsribed to`); }
 
-		if (this.writerFlippedToEndless) {
-			await this.segWriter.setContentLength(this.size);
-			this.writerFlippedToEndless = false;
+		try {
+
+			if (this.writerFlippedToEndless) {
+				await this.segWriter.setContentLength(this.size);
+				this.writerFlippedToEndless = false;
+			}
+
+			const header = await this.segWriter.packHeader();
+			if (this.backpressure) {
+				await this.backpressure();
+			}
+			const ev: HeaderEncrEvent = {
+				type: 'header',
+				header,
+				layout: this.segWriter.showPackedLayout()
+			};
+			this.encOutput!.next!(ev);
+
+			if (this.reencryptSegs) {
+				this.reencryptSegs.onLayoutFreeze();
+			}
+
+		} catch (err) {
+			await this.done(err);
+			throw err;
 		}
-
-		const header = await this.segWriter.packHeader();
-		if (this.backpressure) {
-			await this.backpressure();
-		}
-		const ev: HeaderEncrEvent = {
-			type: 'header',
-			header,
-			layout: this.segWriter.showPackedLayout()
-		};
-		this.encOutput.next!(ev);
-
-		if (this.reencryptSegs) {
-			this.reencryptSegs.onLayoutFreeze();
-		}
-
 	}
 
 	async done(err?: any): Promise<void> {
 		if (!this.encOutput) { throw new Error(`This sink is not subsribed to`); }
 		if (this.isCompleted) { return; }
 		if (err) {
-			this.isCompleted = true;
-			this.encOutput.error!(err);
-			this.stop();
+			this.stopAndSetCompleted(err);
 			return;
 		}
 
@@ -180,12 +203,11 @@ class EncryptingByteSink implements ByteSink {
 		}
 
 		await this.freezeLayout();
-		this.encOutput.complete!();
+		this.stopAndSetCompleted();
 	}
 
 	async write(pos: number, bytes: Uint8Array): Promise<void> {
-		if (!this.encOutput) { throw new Error(`This sink is not subsribed to`); }
-		if (this.isCompleted) { throw new Error(`Writer is already done.`); }
+		this.throwUpIfCompletedOrNotSubscribed();
 		if (this.size !== undefined) {
 			if (this.size < (pos + bytes.length)) {
 				throw new Error(`Writing outside of sink size. Use respective splice before write.`);
@@ -372,15 +394,20 @@ class EncryptingByteSink implements ByteSink {
 	}
 
 	async setSize(size: number|undefined): Promise<void> {
-		await this.segWriter.setContentLength(size);
-		this.size = size;
-		if (this.size === undefined) {
-			this.writerFlippedToEndless = false;
-		} else {
-			this.buffer.cutToSize(this.size);
-			this.biggestContentOfs = this.size;
-			await this.segWriter.setContentLength(undefined);
-			this.writerFlippedToEndless = true;
+		try {
+			await this.segWriter.setContentLength(size);
+			this.size = size;
+			if (this.size === undefined) {
+				this.writerFlippedToEndless = false;
+			} else {
+				this.buffer.cutToSize(this.size);
+				this.biggestContentOfs = this.size;
+				await this.segWriter.setContentLength(undefined);
+				this.writerFlippedToEndless = true;
+			}
+		} catch (err) {
+			await this.done(err);
+			throw err;
 		}
 	}
 
