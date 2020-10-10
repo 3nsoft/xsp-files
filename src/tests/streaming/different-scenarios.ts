@@ -75,6 +75,38 @@ describe(`Empty base file with attributes`, () => {
 			cryptor);
 	});
 
+	itAsync(`writing attributes after writing content and without setting setting attributes size beforehand`, async () => {
+		const newVersion = baseSrc.version + 1;
+		const { byteSink, completion } = await makeStreamSinkWithAttrs(
+			key, zerothNonce, newVersion, cryptor,
+			{ src: baseSrc, attrSize: baseAttrs.length });
+		const newContent = await getRandom(100);
+		await byteSink.spliceLayout(0, newContent.length, newContent.length);
+		await byteSink.write(0, newContent);
+		await byteSink.writeAttrs(newAttrs);
+		await byteSink.done();
+		await compareContentAndAttrs(
+			key, zerothNonce, newVersion, completion,
+			newContent, newAttrs,
+			cryptor);
+	});
+
+	itAsync(`writing attributes after writing big content and without setting setting attributes size beforehand`, async () => {
+		const newVersion = baseSrc.version + 1;
+		const { byteSink, completion } = await makeStreamSinkWithAttrs(
+			key, zerothNonce, newVersion, cryptor,
+			{ src: baseSrc, attrSize: baseAttrs.length });
+		const newContent = await getRandom(1000000);
+		await byteSink.spliceLayout(0, newContent.length, newContent.length);
+		await byteSink.write(0, newContent);
+		await byteSink.writeAttrs(newAttrs);
+		await byteSink.done();
+		await compareContentAndAttrs(
+			key, zerothNonce, newVersion, completion,
+			newContent, newAttrs,
+			cryptor);
+	});
+
 });
 
 describe(`Non-empty base file with attrs`, () => {

@@ -549,6 +549,7 @@ class ChunksBuffer {
 			const chunk = this.chunks[i];
 			chunk.start += delta;
 			chunk.end += delta;
+			i += 1;
 		}
 	}
 

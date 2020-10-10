@@ -14,16 +14,16 @@
  You should have received a copy of the GNU General Public License along with
  this program. If not, see <http://www.gnu.org/licenses/>. */
 
-import { SegId, Locations, SegsInfo, headerContentFor, SegsChainInfo,
-	FiniteSegsChainInfo, InfoExtender, EndlessSegsChainInfo, SegmentInfo }
-	from './xsp-info';
+import { SegId, Locations, SegsInfo, headerContentFor, SegsChainInfo, FiniteSegsChainInfo, InfoExtender, EndlessSegsChainInfo } from './xsp-info';
 import { calculateNonce, NONCE_LENGTH } from '../utils/crypt-utils';
 import { Layout, LayoutBaseSection, LayoutNewSection } from '../streaming/common';
-import { POLY_LENGTH } from 'ecma-nacl/dist/lib/boxes/secret_box';
+import { secret_box } from 'ecma-nacl';
 import { assert } from '../utils/assert';
 import { copy } from '../utils/json-utils';
 import { RNG, BaseBytesInfo, WritableSegmentInfo, NewSegmentInfo, BaseSegmentInfo, writeExc } from './writer';
 import { NewSegments } from './new-segments';
+
+const { POLY_LENGTH } = secret_box;
 
 type NewSegsChainInfo = SegsChainInfo & {
 	type: 'new';
