@@ -1,5 +1,5 @@
 /*
- Copyright (C) 2016, 2018 3NSoft Inc.
+ Copyright (C) 2016, 2018, 2021 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -89,5 +89,11 @@ export namespace utf8 {
 	
 }
 Object.freeze(utf8);
+
+export function makeUint8ArrayCopy(arr: Uint8Array): Uint8Array {
+	const copy = new Uint8Array(arr.length);
+	copy.set(arr);
+	return copy;
+}
 
 Object.freeze(exports);

@@ -1,5 +1,5 @@
 /*
- Copyright(c) 2018 - 2020 3NSoft Inc.
+ Copyright(c) 2018 - 2021 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -12,9 +12,11 @@
  See the GNU General Public License for more details.
  
  You should have received a copy of the GNU General Public License along with
- this program. If not, see <http://www.gnu.org/licenses/>. */
+ this program. If not, see <http://www.gnu.org/licenses/>.
+*/
 
 import { ByteSource, ByteSink, Layout } from '../lib/streaming/common';
+import { makeUint8ArrayCopy } from '../lib/utils/buffer-utils';
 
 class WriterToArray implements ByteSink {
 
@@ -115,7 +117,7 @@ class WriterToArray implements ByteSink {
 
 		this.chunks.splice(index, 0, {
 			ofs: pos,
-			bytes: new Uint8Array(bytes)
+			bytes: makeUint8ArrayCopy(bytes)
 		});
 	}
 

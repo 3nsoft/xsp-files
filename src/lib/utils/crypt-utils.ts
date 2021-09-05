@@ -1,5 +1,5 @@
 /*
- Copyright(c) 2017 3NSoft Inc.
+ Copyright(c) 2017, 2021 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -12,7 +12,10 @@
  See the GNU General Public License for more details.
  
  You should have received a copy of the GNU General Public License along with
- this program. If not, see <http://www.gnu.org/licenses/>. */
+ this program. If not, see <http://www.gnu.org/licenses/>.
+*/
+
+import { makeUint8ArrayCopy } from "./buffer-utils";
 
 export interface AsyncSBoxCryptor {
 
@@ -77,7 +80,7 @@ export function calculateNonce(
 			delta = -delta;
 			adding = false;
 		} else {
-			return new Uint8Array(initNonce);
+			return makeUint8ArrayCopy(initNonce);
 		}
 		deltaU64 = new Uint32Array([ delta, delta/0x100000000 ]);
 	} else {

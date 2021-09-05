@@ -1,5 +1,5 @@
 /*
- Copyright(c) 2015 - 2020 3NSoft Inc.
+ Copyright(c) 2015 - 2021 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -12,16 +12,15 @@
  See the GNU General Public License for more details.
  
  You should have received a copy of the GNU General Public License along with
- this program. If not, see <http://www.gnu.org/licenses/>. */
+ this program. If not, see <http://www.gnu.org/licenses/>.
+*/
 
-import { LocationInSegment, SegId, SegmentInfo, SegsInfo,
-	readSegsInfoFromHeader, Exception, makeBaseException }
-	from './xsp-info';
-import { AsyncSBoxCryptor, calculateNonce, KEY_LENGTH, NONCE_LENGTH }
-	from '../utils/crypt-utils';
+import { LocationInSegment, SegId, SegmentInfo, SegsInfo, readSegsInfoFromHeader, Exception, makeBaseException } from './xsp-info';
+import { AsyncSBoxCryptor, calculateNonce, KEY_LENGTH, NONCE_LENGTH } from '../utils/crypt-utils';
 import { ObjSource, Layout } from '../streaming/common';
 import { assert } from '../utils/assert';
 import { PackingInfo, NewPackInfo } from './packing-info';
+import { makeUint8ArrayCopy } from '../utils/buffer-utils';
 
 export interface SegmentsWriter {
 
@@ -171,7 +170,7 @@ class SegWriter {
 	) {
 		if (key.length !== KEY_LENGTH) { throw new Error(
 				"Given key has wrong size."); }
-		this.key = new Uint8Array(key);
+		this.key = makeUint8ArrayCopy(key);
 		if (this.base) {
 			if (!baseSegs) { throw new Error(`Base segments should be given`); }
 			this.packing = PackingInfo.make(
@@ -190,7 +189,7 @@ class SegWriter {
 			"Given zeroth header nonce has wrong size."); }
 		this.headerNonce = ((this.version > 0) ?
 			calculateNonce(zerothNonce, this.version) :
-			new Uint8Array(zerothNonce));
+			makeUint8ArrayCopy(zerothNonce));
 		Object.seal(this);
 	}
 

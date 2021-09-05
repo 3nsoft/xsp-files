@@ -1,5 +1,5 @@
 /*
- Copyright(c) 2015 - 2020 3NSoft Inc.
+ Copyright(c) 2015 - 2021 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -12,7 +12,8 @@
  See the GNU General Public License for more details.
  
  You should have received a copy of the GNU General Public License along with
- this program. If not, see <http://www.gnu.org/licenses/>. */
+ this program. If not, see <http://www.gnu.org/licenses/>.
+*/
 
 /**
  * This file contains code for working with file headers and (un)packing
@@ -22,6 +23,7 @@
 
 import { calculateNonce, POLY_LENGTH, NONCE_LENGTH } from '../utils/crypt-utils';
 import { assert } from '../utils/assert';
+import { makeUint8ArrayCopy } from '../utils/buffer-utils';
 
 export interface SegsInfo {
 
@@ -240,7 +242,7 @@ function readV1orV2Header(h: Uint8Array): SegsInfo {
 		const lastSegSize = loadUintFrom3Bytes(h, pos);
 		pos += 3;
 		// 4.3) 1st segment nonce
-		const nonce = new Uint8Array(h.subarray(pos, pos+NONCE_LENGTH));
+		const nonce = makeUint8ArrayCopy(h.subarray(pos, pos+NONCE_LENGTH));
 		pos += NONCE_LENGTH;
 		// distinguish between finite and endless segment chains
 		let chainInfo: SegsChainInfo;

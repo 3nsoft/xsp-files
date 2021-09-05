@@ -1,6 +1,6 @@
 {
   "name": "xsp-files",
-  "version": "3.1.9",
+  "version": "3.1.10",
   "description": "XSP file format for objects encrypted with NaCl (XSalsa+Poly).",
   "main": "./dist/lib/index.js",
   "types": "./dist/lib/index.d.ts",
@@ -18,7 +18,7 @@
   "devDependencies": {
     "@types/jasmine": "^2.5.46",
     "@types/node": "^10.0.0",
-    "ecma-nacl": "^2.5.0",
+    "ecma-nacl": "^2.5.1",
     "jasmine": "^3.1.0",
     "rxjs": "^6.3.3",
     "typescript": "^3.7.3"

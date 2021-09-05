@@ -1,5 +1,5 @@
 /*
- Copyright(c) 2015 - 2020 3NSoft Inc.
+ Copyright(c) 2015 - 2021 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -12,14 +12,12 @@
  See the GNU General Public License for more details.
  
  You should have received a copy of the GNU General Public License along with
- this program. If not, see <http://www.gnu.org/licenses/>. */
+ this program. If not, see <http://www.gnu.org/licenses/>.
+*/
 
-import { LocationInSegment, Locations, SegId, SegmentInfo, SegsInfo,
-	readSegsInfoFromHeader, Exception, makeBaseException }
-	from './xsp-info';
-import { AsyncSBoxCryptor, findNonceDelta, nonceDeltaToNumber,
-	KEY_LENGTH, NONCE_LENGTH }
-	from '../utils/crypt-utils';
+import { LocationInSegment, Locations, SegId, SegmentInfo, SegsInfo, readSegsInfoFromHeader, Exception, makeBaseException } from './xsp-info';
+import { AsyncSBoxCryptor, findNonceDelta, nonceDeltaToNumber, KEY_LENGTH, NONCE_LENGTH } from '../utils/crypt-utils';
+import { makeUint8ArrayCopy } from '../utils/buffer-utils';
 	
 export interface SegmentsReader {
 
@@ -114,7 +112,7 @@ class SegReader {
 	) {
 		if (key.length !== KEY_LENGTH) { throw new Error(
 			"Given key has wrong size."); }
-		this.key = new Uint8Array(key);
+		this.key = makeUint8ArrayCopy(key);
 		this.index = new Locations(this.segs);
 		Object.seal(this);
 	}

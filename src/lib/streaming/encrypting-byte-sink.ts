@@ -1,5 +1,5 @@
 /*
- Copyright (C) 2018 - 2020 3NSoft Inc.
+ Copyright (C) 2018 - 2021 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -12,13 +12,15 @@
  See the GNU General Public License for more details.
  
  You should have received a copy of the GNU General Public License along with
- this program. If not, see <http://www.gnu.org/licenses/>. */
+ this program. If not, see <http://www.gnu.org/licenses/>.
+*/
 
 import { ByteSink, Observer, Layout, ByteSinkWithAttrs } from './common';
 import { SegmentsWriter, writeExc, NewSegmentInfo, WritableSegmentInfo } from '../segments/writer';
 import { LocationInSegment, storeUintIn4Bytes } from '../segments/xsp-info';
 import { assert } from '../utils/assert';
 import { SingleProc, makeSyncedFunc } from '../utils/process-syncing';
+import { makeUint8ArrayCopy } from '../utils/buffer-utils';
 
 class EncryptingByteSink implements ByteSink {
 
@@ -580,14 +582,14 @@ class ChunksBuffer {
 				// detouch from any incoming buffers that may be shared/reused
 				// elsewhere, wracking havoc here.
 				this.chunks.splice(i, 0, {
-					start, end, bytes: new Uint8Array(bytes)
+					start, end, bytes: makeUint8ArrayCopy(bytes)
 				});
 			}
 			return;
 		}
 
 		// We copy bytes here for the same reason as above.
-		const newChunk: Chunk = { start, end, bytes: new Uint8Array(bytes) };
+		const newChunk: Chunk = { start, end, bytes: makeUint8ArrayCopy(bytes) };
 		this.chunks.push(newChunk);
 	}
 
