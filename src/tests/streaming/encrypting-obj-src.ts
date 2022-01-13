@@ -1,5 +1,5 @@
 /*
- Copyright (C) 2016 - 2020 3NSoft Inc.
+ Copyright (C) 2016 - 2020, 2022 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -12,14 +12,12 @@
  See the GNU General Public License for more details.
  
  You should have received a copy of the GNU General Public License along with
- this program. If not, see <http://www.gnu.org/licenses/>. */
+ this program. If not, see <http://www.gnu.org/licenses/>.
+*/
 
 import { itAsync, beforeEachAsync } from '../../test-lib/async-jasmine';
-import { KEY_LENGTH, NONCE_LENGTH, makeSegmentsWriter, makeSegmentsReader,
-	makeObjSourceFromArrays, makeEncryptingObjSource }
-	from '../../lib/index';
-import { mockCryptor, getRandom, compare, toOneArray }
-	from '../../test-lib/test-utils';
+import { KEY_LENGTH, NONCE_LENGTH, makeSegmentsWriter, makeSegmentsReader, makeObjSourceFromArrays, makeEncryptingObjSource } from '../../lib/index';
+import { mockCryptor, getRandom, compare, toOneArray } from '../../test-lib/test-utils';
 import { sourceFromArray } from '../../test-lib/array-backed-byte-streaming';
 import { readSegsSequentially } from '../../test-lib/segments-test-utils';
 
@@ -30,6 +28,7 @@ describe(`Function makeObjSourceFromArrays`, () => {
 	let key: Uint8Array;
 	let zerothNonce: Uint8Array;
 	const version = 3;
+	const payloadFormat = 2;
 
 	beforeEachAsync(async () => {
 		key = await getRandom(KEY_LENGTH);
@@ -52,7 +51,7 @@ describe(`Function makeObjSourceFromArrays`, () => {
 			// create encrypting source
 			const segWriter = await makeSegmentsWriter(
 				key, zerothNonce, version,
-				{ type: 'new', segSize: 16 },
+				{ type: 'new', segSize: 16, payloadFormat },
 				getRandom, cryptor);
 			const src = await makeObjSourceFromArrays(contentChunks, segWriter);
 			expect(await src.segSrc.getSize()).not.toBeUndefined();
@@ -79,7 +78,7 @@ describe(`Function makeObjSourceFromArrays`, () => {
 			// create encrypting source
 			const segWriter = await makeSegmentsWriter(
 				key, zerothNonce, version,
-				{ type: 'new', segSize: 16 },
+				{ type: 'new', segSize: 16, payloadFormat },
 				getRandom, cryptor);
 			const src = await makeObjSourceFromArrays(contentChunks, segWriter);
 
@@ -108,7 +107,7 @@ describe(`Function makeObjSourceFromArrays`, () => {
 	itAsync(`makes source that works for no arrays`, async () => {
 		const segWriter = await makeSegmentsWriter(
 			key, zerothNonce, version,
-			{ type: 'new', segSize: 16 },
+			{ type: 'new', segSize: 16, payloadFormat },
 			getRandom, cryptor);
 		const src = await makeObjSourceFromArrays([], segWriter);
 		
@@ -161,6 +160,7 @@ describe(`Function makeEncryptingObjSource`, () => {
 	let key: Uint8Array;
 	let zerothNonce: Uint8Array;
 	const version = 3;
+	const payloadFormat = 2;
 
 	beforeEachAsync(async () => {
 		key = await getRandom(KEY_LENGTH);
@@ -176,7 +176,7 @@ describe(`Function makeEncryptingObjSource`, () => {
 
 			const segWriter = await makeSegmentsWriter(
 				key, zerothNonce, version,
-				{ type: 'new', segSize: 16 },
+				{ type: 'new', segSize: 16, payloadFormat },
 				getRandom, cryptor);
 			
 			const src = await makeEncryptingObjSource(byteSrc, segWriter);
@@ -216,7 +216,7 @@ describe(`Function makeEncryptingObjSource`, () => {
 
 		const segWriter = await makeSegmentsWriter(
 			key, zerothNonce, version,
-			{ type: 'new', segSize: 16 },
+			{ type: 'new', segSize: 16, payloadFormat },
 			getRandom, cryptor);
 		const src = await makeEncryptingObjSource(byteSrc, segWriter);
 
@@ -238,7 +238,7 @@ describe(`Function makeEncryptingObjSource`, () => {
 
 		const newSegWriter = await makeSegmentsWriter(
 			key, zerothNonce, version,
-			{ type: 'new', segSize: 16 },
+			{ type: 'new', segSize: 16, payloadFormat },
 			getRandom, cryptor);
 
 		const initSrc = await makeEncryptingObjSource(initByteSrc, newSegWriter);

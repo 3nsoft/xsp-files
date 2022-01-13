@@ -1,5 +1,5 @@
 /*
- Copyright(c) 2015 - 2021 3NSoft Inc.
+ Copyright(c) 2015 - 2022 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -83,7 +83,9 @@ export interface SegmentsWriter {
 
 	unpackedReencryptChainSegs(): NewSegmentInfo[];
 
-	formatVersion: number;
+	readonly formatVersion: number;
+
+	readonly payloadFormat: number;
 
 }
 
@@ -119,23 +121,26 @@ export async function makeSegmentsWriter(
 	opt: SegmentWriterMakeOpt, rng: RNG, cryptor: AsyncSBoxCryptor
 ): Promise<SegmentsWriter> {
 	if (opt.type === 'new') {
-		const format = (opt.formatWithSections ? 2 : 1);
 		return await SegWriter.makeFresh(
-			key, zerothHeaderNonce, opt.segSize, format, version, rng, cryptor);
+			key, zerothHeaderNonce, opt.segSize,
+			1, opt.payloadFormat, version,
+			rng, cryptor);
 	} else if (opt.type === 'restart') {
 		return await SegWriter.makeRestarted(
 			key, zerothHeaderNonce, opt.header, version, rng, cryptor);
 	} else if (opt.type === 'update') {
 		return await SegWriter.makeUpdated(
-			key, zerothHeaderNonce, opt.base, version, rng, cryptor);
+			key, zerothHeaderNonce, opt.base,
+			opt.payloadFormat, version,
+			rng, cryptor);
 	} else {
 		throw new Error(`Given unknown option type`);
 	}
 }
 
 export type SegmentWriterMakeOpt =
-	{ type: 'new'; segSize: number; formatWithSections?: boolean; } |
-	{ type: 'update'; base: ObjSource; formatWithSections?: boolean; } |
+	{ type: 'new'; segSize: number; payloadFormat: number; } |
+	{ type: 'update'; base: ObjSource; payloadFormat: number; } |
 	{ type: 'restart'; header: Uint8Array; };
 
 class SegWriter {
@@ -195,15 +200,17 @@ class SegWriter {
 
 	static async makeFresh(
 		key: Uint8Array, zerothNonce: Uint8Array,
-		segSizein256bs: number, formatVersion: number,
-		version: number, randomBytes: RNG, cryptor: AsyncSBoxCryptor
+		segSizein256bs: number,
+		formatVersion: number, payloadFormatVersion: number, version: number,
+		randomBytes: RNG, cryptor: AsyncSBoxCryptor
 	): Promise<SegmentsWriter> {
 		if ((segSizein256bs < 1) || (segSizein256bs > 0xffff)) {
 			throw new Error("Given segment size is illegal.");
 		}
 		const newPackInfo: NewPackInfo = {
 			formatVersion,
-			segSize: segSizein256bs << 8
+			segSize: segSizein256bs << 8,
+			payloadFormatVersion
 		};
 		const segWriter = new SegWriter(
 			key, zerothNonce, undefined, newPackInfo,
@@ -225,7 +232,8 @@ class SegWriter {
 
 	static async makeUpdated(
 		key: Uint8Array, zerothNonce: Uint8Array, base: ObjSource,
-		version: number, randomBytes: RNG, cryptor: AsyncSBoxCryptor
+		payloadFormatVersion: number, version: number,
+		randomBytes: RNG, cryptor: AsyncSBoxCryptor
 	): Promise<SegmentsWriter> {
 		const baseHeader = await base.readHeader();
 		const headerContent = await cryptor.formatWN.open(baseHeader, key);
@@ -343,7 +351,8 @@ class SegWriter {
 			showPackedLayout: () => packing.showPackedLayout(),
 			setContentLength: len => packing.setContentLength(len),
 			hasBase: !!this.base,
-			formatVersion: this.packing.formatVersion
+			formatVersion: this.packing.formatVersion,
+			payloadFormat: this.packing.payloadFormatVersion
 		};
 		Object.freeze(wrap);
 		return wrap;

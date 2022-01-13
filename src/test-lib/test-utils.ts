@@ -12,7 +12,8 @@
  See the GNU General Public License for more details.
  
  You should have received a copy of the GNU General Public License along with
- this program. If not, see <http://www.gnu.org/licenses/>. */
+ this program. If not, see <http://www.gnu.org/licenses/>.
+*/
 
 import { arrays, secret_box as sbox } from 'ecma-nacl';
 import { AsyncSBoxCryptor } from '../lib/utils/crypt-utils';
@@ -29,9 +30,13 @@ export function getRandom(numOfBytes: number): Promise<Uint8Array> {
 	}))
 }
 
-export function compare(v: Uint8Array, expectation: Array<number>, m? :string);
-export function compare(v: Uint8Array, expectation: Uint8Array, m? :string);
-export function compare(v: Uint8Array, expectation, m? :string) {
+export function compare(
+	v: Uint8Array, expectation: Array<number>, m? :string): void;
+export function compare(
+	v: Uint8Array, expectation: Uint8Array, m? :string): void;
+export function compare(
+	v: Uint8Array, expectation: Array<number>|Uint8Array, m? :string
+): void {
 	if (v.length !== expectation.length) { throw new Error(
 		`arrays have different sizes; ${m}`); }
 	for (let i=0; i<v.length; i+=1) {
@@ -53,8 +58,9 @@ export function mockCryptor(): AsyncSBoxCryptor {
 	return Object.freeze(ac);
 }
 
-export function objSrcFromArrays(version: number,
-		header: Uint8Array, segs: Uint8Array): ObjSource {
+export function objSrcFromArrays(
+	version: number, header: Uint8Array, segs: Uint8Array
+): ObjSource {
 	const segSrc = sourceFromArray(segs);
 	return {
 		version,

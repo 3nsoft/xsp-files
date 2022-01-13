@@ -1,5 +1,5 @@
 /*
- Copyright (C) 2018 - 2020 3NSoft Inc.
+ Copyright (C) 2018 - 2020, 2022 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -12,18 +12,18 @@
  See the GNU General Public License for more details.
  
  You should have received a copy of the GNU General Public License along with
- this program. If not, see <http://www.gnu.org/licenses/>. */
+ this program. If not, see <http://www.gnu.org/licenses/>.
+*/
 
-import { makeSegmentsWriter, ByteSink, Layout, ObjSource, makeEncryptingByteSink, EncrEvent, SegEncrEvent, AsyncSBoxCryptor, ByteSinkWithAttrs, makeEncryptingByteSinkWithAttrs, makeSegmentsReader } from '../lib';
+import { makeSegmentsWriter, ByteSink, Layout, ObjSource, makeEncryptingByteSink, EncrEvent, SegEncrEvent, AsyncSBoxCryptor, makeSegmentsReader, ByteSource } from '../lib';
 import { getRandom, objSrcFromArrays, compare } from './test-utils';
-import { Observable, Observer } from 'rxjs';
+import { Observable } from 'rxjs';
 import { share, tap } from 'rxjs/operators';
 import { assert } from '../lib/utils/assert';
-import { SegmentWriterMakeOpt } from '../lib/segments/writer';
 import { packSegments, readSegsSequentially } from './segments-test-utils';
-import { storeUintIn4Bytes } from '../lib/segments/xsp-info';
+import { sourceFromArray } from './array-backed-byte-streaming';
 
-export function startProcessingWriteEvents(
+function startProcessingWriteEvents(
 	enc$: Observable<EncrEvent>, base: ObjSource|undefined
 ): Promise<{ header: Uint8Array; allSegs: Uint8Array; }> {
 	let header: Uint8Array;
@@ -110,61 +110,20 @@ export function startProcessingWriteEvents(
 
 export async function makeStreamSink(
 	key: Uint8Array, zerothNonce: Uint8Array, version: number,
-	cryptor: AsyncSBoxCryptor, base: ObjSource|undefined
+	payloadFormat: number, cryptor: AsyncSBoxCryptor, base: ObjSource|undefined
 ): Promise<{ byteSink: ByteSink;
 		completion: Promise<{ header: Uint8Array; allSegs: Uint8Array; }> }> {
 	const segWriter = await makeSegmentsWriter(
-		key, zerothNonce, (base ? base.version + 1 : version),
-		(base ? { type: 'update', base } : { type: 'new', segSize: 16 }),
+		key, zerothNonce,
+		(base ? base.version + 1 : version),
+		(base ?
+			{ type: 'update', base, payloadFormat } :
+			{ type: 'new', segSize: 16, payloadFormat }),
 		getRandom, cryptor);
 	const { sink, sub } = makeEncryptingByteSink(segWriter);
-	const enc$ = Observable.create((obs: Observer<EncrEvent>) => sub(obs))
-	.pipe(share());
+	const enc$ = Observable.create(sub).pipe(share());
 	const completion = startProcessingWriteEvents(enc$, base);
 	return { byteSink: sink, completion };
-}
-
-export async function makeStreamSinkWithAttrs(
-	key: Uint8Array, zerothNonce: Uint8Array, version: number,
-	cryptor: AsyncSBoxCryptor, base?: { src: ObjSource; attrSize: number; }
-): Promise<{ byteSink: ByteSinkWithAttrs;
-		completion: Promise<{ header: Uint8Array; allSegs: Uint8Array; }> }> {
-	const writerOps: SegmentWriterMakeOpt = (base ?
-		{ type: 'update', base: base.src } :
-		{ type: 'new', segSize: 16, formatWithSections: true });
-	const segWriter = await makeSegmentsWriter(
-		key, zerothNonce, (base ? base.src.version + 1 : version),
-		writerOps, getRandom, cryptor);
-	const { sink, sub } = makeEncryptingByteSinkWithAttrs(
-		segWriter, base?.attrSize);
-	const enc$ = Observable.create((obs: Observer<EncrEvent>) => sub(obs))
-	.pipe(share());
-	const completion = startProcessingWriteEvents(enc$, base?.src);
-	return { byteSink: sink, completion };
-}
-
-export async function packAttrsAndConentAsObjSource(
-	attrs: Uint8Array, content: Uint8Array, key: Uint8Array,
-	zerothNonce: Uint8Array, version: number, cryptor: AsyncSBoxCryptor
-): Promise<ObjSource> {
-	const segWriter = await makeSegmentsWriter(
-		key, zerothNonce, version,
-		{ type: 'new', segSize: 16, formatWithSections: true },
-		getRandom, cryptor);
-	const v2bytes = combineV2Content(attrs ,content);
-	const segs = await packSegments(segWriter, v2bytes);
-	const header = await segWriter.packHeader();
-	return objSrcFromArrays(version, header, segs);
-}
-
-export function combineV2Content(
-	attrs: Uint8Array, content: Uint8Array
-): Uint8Array {
-	const allBytes = new Uint8Array(4 + attrs.length + content.length);
-	storeUintIn4Bytes(allBytes, 0, attrs.length);
-	allBytes.set(attrs, 4);
-	allBytes.set(content, 4 + attrs.length);
-	return allBytes;
 }
 
 export async function compareContent(
@@ -179,24 +138,40 @@ export async function compareContent(
 	compare(decrContent, expectation);
 }
 
-export async function compareContentAndAttrs(
-	key: Uint8Array, zerothNonce: Uint8Array, version: number,
-	completion: Promise<{ header: Uint8Array; allSegs: Uint8Array; }>,
-	expectedContent: Uint8Array, expectedAttrs: Uint8Array,
-	cryptor: AsyncSBoxCryptor
-): Promise<void> {
-	const { header, allSegs } = await completion;
-	const segReader = await makeSegmentsReader(
-		key, zerothNonce, version, header, cryptor);
-	const decrContent = await readSegsSequentially(segReader, allSegs);
-	const expectation = combineV2Content(expectedAttrs, expectedContent);
-	compare(decrContent, expectation);
-}
-
 export async function packedBytesToSrc(
 	version: number,
 	packedBytes: Promise<{ header: Uint8Array; allSegs: Uint8Array; }>
 ): Promise<ObjSource> {
 	const { header, allSegs } = await packedBytes;
 	return objSrcFromArrays(version, header, allSegs);
+}
+
+export async function encryptContent(
+	content: Uint8Array,
+	key: Uint8Array, zerothNonce: Uint8Array, version: number,
+	payloadFormat: number, cryptor: AsyncSBoxCryptor
+): Promise<{ header: Uint8Array; seekableSegsSrc: ByteSource; }> {
+	const segWriter = await makeSegmentsWriter(
+		key, zerothNonce, version,
+		{ type: 'new', segSize: 16, payloadFormat },
+		getRandom, cryptor);
+	segWriter.setContentLength(content.length);
+	const header = await segWriter.packHeader();
+	const allSegs = await packSegments(segWriter, content);
+	const seekableSegsSrc = sourceFromArray(allSegs);
+	return { header, seekableSegsSrc };
+}
+
+export async function packToObjSrc(
+	content: Uint8Array,
+	key: Uint8Array, zerothNonce: Uint8Array, version: number,
+	payloadFormat: number, cryptor: AsyncSBoxCryptor
+): Promise<ObjSource> {
+	const { header, seekableSegsSrc: segSrc } = await encryptContent(
+		content, key, zerothNonce, version, payloadFormat, cryptor);
+	return {
+		version,
+		readHeader: async () => header,
+		segSrc
+	};
 }

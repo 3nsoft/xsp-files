@@ -1,5 +1,5 @@
 /*
- Copyright(c) 2013 - 2018, 2020 3NSoft Inc.
+ Copyright(c) 2013 - 2018, 2020, 2022 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -12,7 +12,8 @@
  See the GNU General Public License for more details.
  
  You should have received a copy of the GNU General Public License along with
- this program. If not, see <http://www.gnu.org/licenses/>. */
+ this program. If not, see <http://www.gnu.org/licenses/>.
+*/
 
 /**
  * Testing xsp file format functions.
@@ -29,17 +30,20 @@ const cryptor = mockCryptor();
  * Test encrypting and packing dataLen of bytes of data into xsp file
  * with segment size segSizein256bs with a simple, single chain header.
  */
-async function testSingleChainHeader(dataLen: number, segSizein256bs: number) {
+async function testSingleChainHeader(
+	dataLen: number, segSizein256bs: number
+): Promise<void> {
 
 	const data = await getRandom(dataLen);
 	const key = await getRandom(KEY_LENGTH);
 	const zerothHeaderNonce = await getRandom(NONCE_LENGTH);
 	const version = 7;
-	
+	const payloadFormat = 2;
+
 	// initialize writer
 	const writer = await makeSegmentsWriter(
 		key, zerothHeaderNonce, version,
-		{ type: 'new', segSize: segSizein256bs },
+		{ type: 'new', segSize: segSizein256bs, payloadFormat },
 		getRandom, cryptor);
 	expect(writer.version).toBe(version);
 	expect(writer.isEndlessFile).toBe(true);
@@ -48,7 +52,8 @@ async function testSingleChainHeader(dataLen: number, segSizein256bs: number) {
 	await writer.setContentLength(dataLen);
 	expect(writer.isEndlessFile).toBe(false)
 	expect(writer.contentLength).toBe(dataLen);
-	
+	expect(writer.payloadFormat).toBe(payloadFormat);
+
 	// pack file header
 	expect(writer.isHeaderPacked).toBe(false);
 	const fileHeader = await writer.packHeader();
@@ -61,7 +66,7 @@ async function testSingleChainHeader(dataLen: number, segSizein256bs: number) {
 	const allSegs = await packSegments(writer, data);
 	const segmentsLen = writer.segmentsLength!;
 	expect(allSegs.length).toBe(segmentsLen);
-	
+
 	// wipe key bytes from memory
 	writer.destroy();
 
@@ -75,7 +80,7 @@ async function testSingleChainHeader(dataLen: number, segSizein256bs: number) {
 	const dataFromSegs = await readSegsSequentially(reader, allSegs);
 	compare(dataFromSegs, data,
 		"Reconstructed data is not the same as original");
-	
+
 	// wipe key bytes from memory
 	reader.destroy();
 
@@ -99,11 +104,11 @@ async function testSingleChainHeader(dataLen: number, segSizein256bs: number) {
 
 async function packEndlessToFormObjSrc(
 	data: Uint8Array, version: number, segSizein256bs: number,
-	key: Uint8Array, zerothHeaderNonce: Uint8Array
+	payloadFormat: number, key: Uint8Array, zerothHeaderNonce: Uint8Array
 ): Promise<ObjSource> {
 	const writer = await makeSegmentsWriter(
 		key, zerothHeaderNonce, version,
-		{ type: 'new', segSize: segSizein256bs },
+		{ type: 'new', segSize: segSizein256bs, payloadFormat },
 		getRandom, cryptor);
 	const header = await writer.packHeader();
 	const segs = await packSegments(writer, data);
@@ -114,23 +119,27 @@ async function packEndlessToFormObjSrc(
  * Test encrypting and packing dataLen bytes of data into xsp file with
  * segment size segSizein256bs of endless nature
  */
-async function testEndlessFile(dataLen: number, segSizein256bs: number) {
+async function testEndlessFile(
+	dataLen: number, segSizein256bs: number
+): Promise<void> {
 
 	const data = await getRandom(dataLen);
 	const key = await getRandom(KEY_LENGTH);
 	const zerothHeaderNonce = await getRandom(NONCE_LENGTH);
 	const version = 3;
+	const payloadFormat = 2;
 
 	// initialize writer
 	const writer = await makeSegmentsWriter(
 		key, zerothHeaderNonce, version,
-		{ type: 'new', segSize: segSizein256bs },
+		{ type: 'new', segSize: segSizein256bs, payloadFormat },
 		getRandom, cryptor);
 	expect(writer.version).toBe(version);
 	expect(writer.isEndlessFile).toBe(true);
 	expect(writer.contentLength).toBeUndefined();
 	expect(writer.segmentsLength).toBeUndefined();
-	
+	expect(writer.payloadFormat).toBe(payloadFormat);
+
 	// pack file header
 	expect(writer.isHeaderPacked).toBe(false);
 	const fileHeader = await writer.packHeader();
@@ -141,7 +150,7 @@ async function testEndlessFile(dataLen: number, segSizein256bs: number) {
 
 	// pack segments
 	const allSegs = await packSegments(writer, data);
-	
+
 	// wipe key bytes from memory
 	writer.destroy();
 
@@ -155,7 +164,7 @@ async function testEndlessFile(dataLen: number, segSizein256bs: number) {
 	const dataFromSegs = await readSegsSequentially(reader, allSegs);
 	compare(dataFromSegs, data,
 		"Reconstructed data is not the same as original");
-	
+
 	// wipe key bytes from memory
 	reader.destroy();
 
@@ -260,6 +269,7 @@ describe(`SegmentsWriter`, () => {
 	const segSize = segSizein256bs*256;
 	const key = getRandomSync(KEY_LENGTH);
 	const zerothHeaderNonce = getRandomSync(NONCE_LENGTH);
+	const payloadFormat = 2;
 
 	itAsync(`changes from endless to finite, when length is deducible and before header is packed`, async () => {
 		const dataLens = [ 3*segSize, 3*(segSize - POLY_LENGTH) ];
@@ -267,7 +277,7 @@ describe(`SegmentsWriter`, () => {
 			const data = await getRandom(dataLen);
 			const writer = await makeSegmentsWriter(
 				key, zerothHeaderNonce, 1,
-				{ type: 'new', segSize: segSizein256bs },
+				{ type: 'new', segSize: segSizein256bs, payloadFormat },
 				getRandom, cryptor);
 			expect(writer.isEndlessFile).toBe(true);
 			await packSegments(writer, data);
@@ -286,7 +296,7 @@ describe(`SegmentsWriter`, () => {
 		for (const dataLen of dataLens) {
 			const data = await getRandom(dataLen);
 			const objV1 = await packEndlessToFormObjSrc(
-				data, 1, segSizein256bs, key, zerothHeaderNonce);
+				data, 1, segSizein256bs, payloadFormat, key, zerothHeaderNonce);
 
 			// check that reader sees header as one for endless file
 			const reader = await makeSegmentsReader(
@@ -296,7 +306,7 @@ describe(`SegmentsWriter`, () => {
 			// next version writer switches to finite file
 			const writer = await makeSegmentsWriter(
 				key, zerothHeaderNonce, 2,
-				{ type: 'update', base: objV1 },
+				{ type: 'update', base: objV1, payloadFormat },
 				getRandom, cryptor);
 			expect(writer.isEndlessFile).toBe(false);
 			expect(writer.segmentsLength).toBe((await objV1.segSrc.getSize()).size);
@@ -308,7 +318,7 @@ describe(`SegmentsWriter`, () => {
 			Promise<{ dataV1: Uint8Array; objV1: ObjSource; }> {
 		const dataV1 = await getRandom(10*segSize + 100);
 		const objV1 = await packEndlessToFormObjSrc(
-			dataV1, 1, segSizein256bs, key, zerothHeaderNonce);
+			dataV1, 1, segSizein256bs, payloadFormat, key, zerothHeaderNonce);
 		return { dataV1, objV1 };
 	}
 
@@ -322,7 +332,7 @@ describe(`SegmentsWriter`, () => {
 			({ objV1, dataV1 } = await prepObjV1(10, 100));
 			writer = await makeSegmentsWriter(
 				key, zerothHeaderNonce, 2,
-				{ type: 'update', base: objV1 },
+				{ type: 'update', base: objV1, payloadFormat },
 				getRandom, cryptor);
 		});
 
@@ -462,7 +472,7 @@ describe(`SegmentsWriter`, () => {
 			({ objV1, dataV1 } = await prepObjV1(10, 100));
 			writer = await makeSegmentsWriter(
 				key, zerothHeaderNonce, 2,
-				{ type: 'update', base: objV1 },
+				{ type: 'update', base: objV1, payloadFormat },
 				getRandom, cryptor);
 		});
 
@@ -724,7 +734,7 @@ describe(`SegmentsWriter`, () => {
 			const version = 2;
 			const newWriter = await makeSegmentsWriter(
 				key, zerothHeaderNonce, version,
-				{ type: 'new', segSize: 16 },
+				{ type: 'new', segSize: 16, payloadFormat },
 				getRandom, cryptor);
 			await newWriter.setContentLength(6*1024*1024+3456);
 			const header = await newWriter.packHeader();
@@ -743,9 +753,9 @@ describe(`SegmentsWriter`, () => {
 			.then(
 				() => fail(`splice must fail in restarted mode`),
 				() => {});
-	
+
 		});
-	
+
 	});
 
 	describe(`.segmentInfos()`, () => {
@@ -758,7 +768,7 @@ describe(`SegmentsWriter`, () => {
 			({ objV1, dataV1 } = await prepObjV1(10, 100));
 			writer = await makeSegmentsWriter(
 				key, zerothHeaderNonce, 2,
-				{ type: 'update', base: objV1 },
+				{ type: 'update', base: objV1, payloadFormat },
 				getRandom, cryptor);
 		});
 

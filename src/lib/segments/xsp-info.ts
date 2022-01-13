@@ -1,5 +1,5 @@
 /*
- Copyright(c) 2015 - 2021 3NSoft Inc.
+ Copyright(c) 2015 - 2022 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -43,6 +43,8 @@ export interface SegsInfo {
 
 	formatVersion: number;
 
+	payloadFormatVersion: number;
+
 }
 
 export interface AttrSegInfo {
@@ -64,35 +66,34 @@ export interface EndlessSegsChainInfo {
 
 export type SegsChainInfo = FiniteSegsChainInfo|EndlessSegsChainInfo;
 
-export function headerContentFor(s: SegsInfo, pads: number): Uint8Array {
-	assert(Number.isInteger(pads) && (pads >= 0));
-	if ((s.formatVersion === 1)
-	|| (s.formatVersion === 2)) {
-		return assembleV1andV2HeaderContent(s, pads);
+export function headerContentFor(s: SegsInfo): Uint8Array {
+	if (s.formatVersion === 1) {
+		if (!Number.isInteger(s.payloadFormatVersion)
+		|| (s.payloadFormatVersion < 1)|| (64 < s.payloadFormatVersion)) {
+			throw new Error(`Payload format version is not an integer from 1 to 64 inclusive.`);
+		}
+		return assembleV1HeaderContent(s);
 	} else {
-		throw new Error(`Version ${s.formatVersion} is not known`);
+		throw new Error(`Format version ${s.formatVersion} is not known`);
 	}
 }
 
-const V_1_2_CHAIN_LEN_IN_H = 3 + 4 + NONCE_LENGTH;
+const V_1_CHAIN_LEN_IN_H = 3 + 4 + NONCE_LENGTH;
 
-function assembleV1andV2HeaderContent(s: SegsInfo, pads: number): Uint8Array {
-	const headerLen = 1 + 2 + V_1_2_CHAIN_LEN_IN_H*(s.segChains.length + pads);
+function assembleV1HeaderContent(s: SegsInfo): Uint8Array {
+	const headerLen = 1 + 2 + V_1_CHAIN_LEN_IN_H*(s.segChains.length);
 	const h = new Uint8Array(headerLen);
 	let pos = 0;
 	
-	// 1) version byte
-	h[pos] = s.formatVersion;
+	// 1) version byte: 0b00 for header format 1, and six bits for payload ver.
+	h[pos] = (s.payloadFormatVersion - 1) & 0b111111;
 	pos += 1;
 
 	// 3) segment size in 256 byte units
 	storeUintIn2Bytes(h, pos, s.segSize >>> 8);
 	pos += 2;
 
-	// 4.1) pads: array h is already initialized to all zeros
-	pos += V_1_2_CHAIN_LEN_IN_H*pads;
-
-	// 4.2) segment chains
+	// 4) segment chains
 	for (let i=0; i<s.segChains.length; i+=1) {
 		const chainInfo = s.segChains[i];
 		// 4.1) number of segments in the chain
@@ -184,9 +185,9 @@ export function storeUintIn4Bytes(x: Uint8Array, i: number, u: number): void {
 
 export function readSegsInfoFromHeader(h: Uint8Array): SegsInfo {
 	if (h.length < 1) { throw inputException(``); }
-	const v = h[0];
-	if ((v === 1) || (v === 2)) {
-		return readV1orV2Header(h);
+	const v = (h[0] >> 6) + 1;
+	if (v === 1) {
+		return readV1Header(h);
 	} else {
 		throw inputException(`Given header version ${v} is not supported`);
 	}
@@ -218,14 +219,13 @@ export function inputException(msg?: string, cause?: any): Exception {
 	return exception('inputParsing', msg, cause);
 }
 
-function readV1orV2Header(h: Uint8Array): SegsInfo {
-	if (!isV1andV2HeaderLength(h.length)) { throw inputException(
+function readV1Header(h: Uint8Array): SegsInfo {
+	if (!isV1HeaderLength(h.length)) { throw inputException(
 		`Header content size ${h.length} doesn't correspond to version 1.`); }
 
 	// 1) check version byte
-	const formatVersion = h[0];
-	if ((formatVersion !== 1) && (formatVersion !== 2)) { throw inputException(
-		`Given header version is ${formatVersion} instead of 1 or 2`); }
+	const formatVersion = (h[0] >> 6) + 1;
+	const payloadFormatVersion = (h[0] & 0b111111) + 1;
 	let pos = 1;
 
 	// 3) segment size in 256 byte units
@@ -258,10 +258,10 @@ function readV1orV2Header(h: Uint8Array): SegsInfo {
 		}
 	}
 
-	return { segChains, segSize, formatVersion };
+	return { segChains, segSize, formatVersion, payloadFormatVersion };
 }
 
-function isV1andV2HeaderLength(len: number): boolean {
+function isV1HeaderLength(len: number): boolean {
 	len -= (1 + 2);
 	if (len < 0) { return false; }
 	if ((len % 31) === 0) { return true; }

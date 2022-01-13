@@ -1,5 +1,5 @@
 /*
- Copyright(c) 2017 - 2018 3NSoft Inc.
+ Copyright(c) 2017 - 2018, 2022 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -12,13 +12,11 @@
  See the GNU General Public License for more details.
  
  You should have received a copy of the GNU General Public License along with
- this program. If not, see <http://www.gnu.org/licenses/>. */
+ this program. If not, see <http://www.gnu.org/licenses/>.
+*/
 
-import { getRandom, getRandomSync, mockCryptor }
-	from '../../test-lib/test-utils';
-import { calculateNonce, NONCE_LENGTH, KEY_LENGTH, compareVectors,
-	makeSegmentsWriter, makeSegmentsReader }
-	from '../../lib/index';
+import { getRandom, getRandomSync, mockCryptor } from '../../test-lib/test-utils';
+import { calculateNonce, NONCE_LENGTH, KEY_LENGTH, compareVectors, makeSegmentsWriter, makeSegmentsReader } from '../../lib/index';
 import { itAsync } from '../../test-lib/async-jasmine';
 import { packSegments, readSegsSequentially } from '../../test-lib/segments-test-utils';
 
@@ -31,11 +29,12 @@ describe('Header nonce', () => {
 	const key = getRandomSync(KEY_LENGTH);
 	const zerothHeaderNonce = getRandomSync(NONCE_LENGTH);
 	const version = 7;
+	const payloadFormat = 2;
 	
 	itAsync('is related to initial zeroth nonce via version', async () => {
 		const writer = await makeSegmentsWriter(
 			key, zerothHeaderNonce, version,
-			{ type: 'new', segSize: segSizein256bs },
+			{ type: 'new', segSize: segSizein256bs, payloadFormat },
 			getRandom, cryptor);
 
 		const segs = await packSegments(writer, data);

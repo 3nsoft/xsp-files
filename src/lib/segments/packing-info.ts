@@ -1,5 +1,5 @@
 /*
- Copyright(c) 2018 - 2020 3NSoft Inc.
+ Copyright(c) 2018 - 2020, 2022 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -12,7 +12,8 @@
  See the GNU General Public License for more details.
  
  You should have received a copy of the GNU General Public License along with
- this program. If not, see <http://www.gnu.org/licenses/>. */
+ this program. If not, see <http://www.gnu.org/licenses/>.
+*/
 
 import { SegId, Locations, SegsInfo, headerContentFor, SegsChainInfo, FiniteSegsChainInfo, InfoExtender, EndlessSegsChainInfo } from './xsp-info';
 import { calculateNonce, NONCE_LENGTH } from '../utils/crypt-utils';
@@ -44,6 +45,7 @@ interface WritableSegsInfo extends SegsInfo {
 export interface NewPackInfo {
 	segSize: number;
 	formatVersion: number;
+	payloadFormatVersion: number;
 }
 
 /**
@@ -70,7 +72,8 @@ export class PackingInfo {
 			this.segs = {
 				segSize: newPackInfo.segSize,
 				segChains: [],
-				formatVersion: newPackInfo.formatVersion
+				formatVersion: newPackInfo.formatVersion,
+				payloadFormatVersion: newPackInfo.payloadFormatVersion
 			};
 			this.index = new Locations(this.segs);
 		} else if (baseSegs && !newPackInfo) {
@@ -101,7 +104,8 @@ export class PackingInfo {
 	static restartWithAllNewFrozenLayout(segs: SegsInfo): PackingInfo {
 		const newPackInfo: NewPackInfo = {
 			segSize: segs.segSize,
-			formatVersion: segs.formatVersion
+			formatVersion: segs.formatVersion,
+			payloadFormatVersion: segs.payloadFormatVersion
 		};
 		const pInfo = new PackingInfo(
 			undefined, newPackInfo, undefined, undefined as any);
@@ -113,7 +117,8 @@ export class PackingInfo {
 		this.segs = {
 			segSize: segs.segSize,
 			segChains: segs.segChains as any,
-			formatVersion: segs.formatVersion
+			formatVersion: segs.formatVersion,
+			payloadFormatVersion: segs.payloadFormatVersion
 		};
 		this.index = new Locations(this.segs);
 		for (let i=0; i<this.segs.segChains.length; i+=1) {
@@ -126,6 +131,10 @@ export class PackingInfo {
 
 	get formatVersion(): number {
 		return this.segs.formatVersion;
+	}
+
+	get payloadFormatVersion(): number {
+		return this.segs.payloadFormatVersion;
 	}
 
 	showLayout(): Layout {
@@ -339,8 +348,8 @@ export class PackingInfo {
 
 		const changedToEndless = lastChain.newSegs.turnIntoEndlessChain();
 		if (changedToEndless) {
-			delete (lastChain as FiniteSegsChainInfo).numOfSegs;
-			delete (lastChain as FiniteSegsChainInfo).lastSegSize;
+			delete (lastChain as Partial<FiniteSegsChainInfo>).numOfSegs;
+			delete (lastChain as Partial<FiniteSegsChainInfo>).lastSegSize;
 			(lastChain as EndlessSegsChainInfo).isEndless = true;
 			this.index.update();
 		} else {
@@ -541,7 +550,7 @@ export class PackingInfo {
 			c.newSegs.cutTail(endSeg, cutSeg);
 			cutTailOfHeadBaseBytesIn(c, endSeg, endPosInSeg);
 			if (c.isEndless) {
-				delete c.isEndless;
+				delete (c as WritableSegsChainInfo).isEndless;
 			}
 			(c as FiniteSegsChainInfo).numOfSegs = numOfSegs;
 			(c as FiniteSegsChainInfo).lastSegSize = (cutSeg ? endPosInSeg : this.segs.segSize);
@@ -828,12 +837,7 @@ export class PackingInfo {
 	}
 
 	getHeaderContentToPack(): Uint8Array {
-
-		// XXX set some random number of pads, but reasonable:
-		// two sections for 100 segs is ok, but for just 1 seg is not.
-
-		const pads = 0;
-		const h = headerContentFor(this.segs, pads);
+		const h = headerContentFor(this.segs);
 		this.headerPacked = true;
 		return h;
 	}
@@ -981,8 +985,8 @@ async function turnBaseToNewFiniteSegsChainInfo(
 	assert(c.numOfSegs === 1);
 	const newC = await makeFiniteNewSegsChainInfo(
 		1, headBytes.len, headBytes, randomBytes);
-	delete c.baseOfs;
-	delete c.baseContentOfs;
+	delete (c as Partial<BaseSegsChainInfo>).baseOfs;
+	delete (c as Partial<BaseSegsChainInfo>).baseContentOfs;
 	for (const key of Object.keys(newC)) {
 		c[key] = newC[key];
 	}

@@ -1,5 +1,5 @@
 /*
- Copyright (C) 2016 - 2020 3NSoft Inc.
+ Copyright (C) 2016 - 2020, 2022 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -12,7 +12,8 @@
  See the GNU General Public License for more details.
  
  You should have received a copy of the GNU General Public License along with
- this program. If not, see <http://www.gnu.org/licenses/>. */
+ this program. If not, see <http://www.gnu.org/licenses/>.
+*/
 
 import { NONCE_LENGTH } from '../utils/crypt-utils';
 import { base64urlSafe } from '../utils/buffer-utils';
@@ -25,11 +26,6 @@ export interface ByteSource {
 	getSize(): Promise<{ size: number; isEndless: boolean; }>;
 	seek(offset: number): Promise<void>;
 	getPosition(): Promise<number>;
-}
-
-export interface ByteSourceWithAttrs extends ByteSource {
-	readAttrs(): Promise<Uint8Array>;
-	getAttrsSize(): Promise<number>;
 }
 
 /**
@@ -70,11 +66,6 @@ export interface ByteSink {
 	freezeLayout(): Promise<void>;
 	write(pos: number, bytes: Uint8Array): Promise<void>;
 	done(err?: any): Promise<void>;
-}
-
-export interface ByteSinkWithAttrs extends ByteSink {
-	setAttrSectionSize(size: number): Promise<void>;
-	writeAttrs(bytes: Uint8Array): Promise<void>;
 }
 
 /**
