@@ -17,7 +17,7 @@
 
 import { ByteSource } from './common';
 import { SegmentsReader } from '../segments/reader';
-import { SegmentInfo, loadUintFrom4Bytes } from '../segments/xsp-info';
+import { SegmentInfo } from '../segments/xsp-info';
 import { assert } from '../utils/assert';
 
 
@@ -41,7 +41,8 @@ class DecryptingByteSource implements ByteSource {
 	): ByteSource {
 		const decr = new DecryptingByteSource(segsSrc, segsReader);
 		const w: ByteSource = {
-			read: decr.read.bind(decr),
+			readAt: decr.readAt.bind(decr),
+			readNext: decr.readNext.bind(decr),
 			getSize: decr.getSize.bind(decr),
 			getPosition: decr.getPosition.bind(decr),
 			seek: decr.seek.bind(decr)
@@ -99,7 +100,7 @@ class DecryptingByteSource implements ByteSource {
 		};
 	}
 
-	read(len: number|undefined): Promise<Uint8Array|undefined> {
+	readNext(len: number|undefined): Promise<Uint8Array|undefined> {
 		if (!this.segIter) {
 			this.segIter = this.segReader.segmentInfos();
 		}
@@ -109,6 +110,13 @@ class DecryptingByteSource implements ByteSource {
 			assert(Number.isInteger(len) && (len > 0), `Invalid length given`);
 			return this.readLimitedLen(len);
 		}
+	}
+
+	async readAt(
+		pos: number, len: number|undefined
+	): Promise<Uint8Array|undefined> {
+		await this.seek(pos);
+		return await this.readNext(len);
 	}
 
 	private async readToTheEnd(): Promise<Uint8Array|undefined> {
@@ -193,7 +201,7 @@ class DecryptingByteSource implements ByteSource {
 
 	private async readAndDecryptSeg(): Promise<Uint8Array> {
 		await this.segsSrc.seek(this.seg!.packedOfs);
-		const segBytes = await this.segsSrc.read(this.seg!.packedLen);
+		const segBytes = await this.segsSrc.readNext(this.seg!.packedLen);
 		if (!segBytes) { throw new Error(
 			`EOF: source of packed segments unexpectidly ended`); }
 		return await this.segReader.openSeg(this.seg!, segBytes);

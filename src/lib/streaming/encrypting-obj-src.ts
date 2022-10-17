@@ -1,5 +1,5 @@
 /*
- Copyright (C) 2015 - 2020 3NSoft Inc.
+ Copyright (C) 2015 - 2020, 2022 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -28,7 +28,6 @@ import { assert } from '../utils/assert';
  * @param segWriter is a new/fresh/without-base writer that encrypts bytes into
  * segments. Segments writer can be destroyed after this call, as it is not
  * used by resultant source over its lifetime.
- * @param objVersion
  */
 export async function makeObjSourceFromArrays(
 	arrs: Uint8Array|Uint8Array[], segWriter: SegmentsWriter
@@ -45,7 +44,7 @@ export async function makeObjSourceFromArrays(
 	}
 	const header = await segWriter.packHeader();
 	const version = segWriter.version;
-	return makeNonSeekableObjSrcFromSegs(version, header, packedSegs);
+	return makeObjSrcFromSegs(version, header, packedSegs);
 }
 
 function totalLengthOf(arrs: Uint8Array[]): number {
@@ -56,15 +55,81 @@ function totalLengthOf(arrs: Uint8Array[]): number {
 	return len;
 }
 
+
 class ReaderFromArrayOfBytes {
 
 	private arrOfs = 0;
 	private byteOfs = 0;
+	private position = 0;
+	private readonly totalLen: number;
 
 	constructor(
-		private arrs: Uint8Array[]
+		private readonly arrs: Uint8Array[]
 	) {
+		this.totalLen = totalLengthOf(this.arrs);
 		Object.seal(this);
+	}
+
+	static makeByteSource(arrs: Uint8Array[]): ByteSource {
+		const src = new ReaderFromArrayOfBytes(arrs);
+		const wrap: ByteSource = {
+			getPosition: async () => src.getPosition(),
+			getSize: async () => src.getSize(),
+			readAt: async (pos, len) => src.readAt(pos, len),
+			readNext: async len => src.readNext(len),
+			seek: async ofs => src.seek(ofs),
+		};
+		return wrap;
+	}
+
+	readAt(pos: number, len: number|undefined): Uint8Array|undefined {
+		this.seek(pos);
+		return this.readNext(len);
+	}
+
+	readNext(len: number|undefined): Uint8Array|undefined {
+		if (len === undefined) {
+			len = this.totalLen - this.position;
+			if (len < 1) { return; }
+		} else if (!Number.isInteger(len) || (len < 0)) {
+			throw new Error(`Given len argument is not a non-negative integer`);
+		} else {
+			len = Math.min(len, this.totalLen - this.position);
+			if (len === 0) { return; }
+		}
+		const chunk = this.getNext(len);
+		this.position += chunk.length;
+		return ((chunk.length === 0) ? undefined : chunk);
+	}
+
+	getSize(): { size: number; isEndless: boolean; } {
+		return { isEndless: false, size: this.totalLen };
+	}
+
+	seek(ofs: number): void {
+		if (!Number.isInteger(ofs) || (ofs < 0)) {
+			throw new Error(`Given offset argument is not a non-negative integer`);
+		}
+		for (
+			this.byteOfs=0, this.arrOfs=0, this.position=0;
+			this.arrOfs<this.arrs.length;
+			this.arrOfs+=1
+		) {
+			const arrLen = this.arrs[this.arrOfs].length;
+			if (ofs < arrLen) {
+				this.byteOfs = ofs;
+				this.position += ofs;
+				return;
+			} else {
+				this.byteOfs = arrLen;
+				this.position += arrLen;
+				ofs -= arrLen;
+			}
+		}
+	}
+
+	getPosition(): number {
+		return this.position;
 	}
 
 	getNext(len: number): Uint8Array {
@@ -93,36 +158,18 @@ class ReaderFromArrayOfBytes {
 Object.freeze(ReaderFromArrayOfBytes.prototype);
 Object.freeze(ReaderFromArrayOfBytes);
 
-function makeNonSeekableSrcFromArrays(arrs: Uint8Array[]): ByteSource {
-	const reader = new ReaderFromArrayOfBytes(arrs);
-	const totalLen = totalLengthOf(arrs);
-	let position = 0;
-	const src: ByteSource = {
-		getSize: async () => ({ isEndless: false, size: totalLen }),
-		read: async (len) => {
-			if (len === undefined) {
-				len = totalLen - position;
-				if (len < 1) { return; }
-			}
-			const chunk = reader.getNext(len);
-			return ((chunk.length === 0) ? undefined : chunk);
-		},
-		seek: async () => { throw new Error(`This byte source can't seek`); },
-		getPosition: async () => position
-	};
-	return src;
-}
 
-function makeNonSeekableObjSrcFromSegs(
+function makeObjSrcFromSegs(
 	version: number, header: Uint8Array, segs: Uint8Array[]
 ): ObjSource {
 	const src: ObjSource = {
 		version,
 		readHeader: async () => header,
-		segSrc: makeNonSeekableSrcFromArrays(segs)
+		segSrc: ReaderFromArrayOfBytes.makeByteSource(segs)
 	};
 	return src;
 }
+
 
 class EncryptingObjSource implements ObjSource, ByteSource {
 
@@ -133,7 +180,8 @@ class EncryptingObjSource implements ObjSource, ByteSource {
 	private segIsRead = false;
 
 	segSrc: ByteSource = {
-		read: this.read.bind(this),
+		readAt: this.readAt.bind(this),
+		readNext: this.readNext.bind(this),
 		getSize: this.getSize.bind(this),
 		getPosition: this.getPosition.bind(this),
 		seek: this.seek.bind(this)
@@ -206,7 +254,7 @@ class EncryptingObjSource implements ObjSource, ByteSource {
 		};
 	}
 
-	async read(len: number|undefined): Promise<Uint8Array|undefined> {
+	async readNext(len: number|undefined): Promise<Uint8Array|undefined> {
 		let bytes: Uint8Array;
 		if (len === undefined) {
 			bytes = await this.readToTheEnd();
@@ -215,6 +263,13 @@ class EncryptingObjSource implements ObjSource, ByteSource {
 			bytes = await this.readLimitedLen(len);
 		}
 		return ((bytes.length > 0) ? bytes : undefined);
+	}
+
+	async readAt(
+		pos: number, len: number|undefined
+	): Promise<Uint8Array|undefined> {
+		await this.seek(pos);
+		return await this.readNext(len);
 	}
 
 	private async readLimitedLen(len: number): Promise<Uint8Array> {
@@ -250,7 +305,7 @@ class EncryptingObjSource implements ObjSource, ByteSource {
 	}
 
 	private async prepBufferedSeg(): Promise<void> {
-		const content = await this.byteSrc.read(this.seg!.contentLen);
+		const content = await this.byteSrc.readNext(this.seg!.contentLen);
 
 		if (!content) {
 			if (!this.segWriter.isEndlessFile) { throw new Error(
@@ -369,6 +424,7 @@ class EncryptingObjSource implements ObjSource, ByteSource {
 }
 Object.freeze(EncryptingObjSource.prototype);
 Object.freeze(EncryptingObjSource);
+
 
 function toOneArray(arrs: Uint8Array[]): Uint8Array {
 	const len = totalLengthOf(arrs);

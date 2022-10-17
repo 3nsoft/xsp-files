@@ -286,8 +286,8 @@ class SegWriter {
 
 	private async readFromBase(info: BaseBytesInfo): Promise<Uint8Array> {
 		if (!this.base) { throw new Error(`Base source is not set in writer.`); }
-		await this.base.segSrc.seek!(info.baseSeg.ofs);
-		const segBytes = await this.base.segSrc.read(info.baseSeg.len);
+		await this.base.segSrc.seek(info.baseSeg.ofs);
+		const segBytes = await this.base.segSrc.readNext(info.baseSeg.len);
 		if (!segBytes) { throw new Error(
 			`Unexpected end of base segments source`); }
 		const content = await this.cryptor.open(

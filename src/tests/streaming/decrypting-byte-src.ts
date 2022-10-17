@@ -42,7 +42,7 @@ async function testDecrObjSrc(
 	// test decryption in one go
 	{
 		await decr.seek(0);
-		const decryptedBytes = await decr.read(undefined);
+		const decryptedBytes = await decr.readNext(undefined);
 		if (content.length === 0) {
 			expect(decryptedBytes).toBeUndefined();
 			return;
@@ -55,16 +55,16 @@ async function testDecrObjSrc(
 		await decr.seek(0);
 		const decryptedChunks: Uint8Array[] = [];
 		const chunkLen = Math.floor(content.length/5);
-		let bytes = await decr.read(chunkLen);
+		let bytes = await decr.readNext(chunkLen);
 		while (bytes) {
 			decryptedChunks.push(bytes);
-			bytes = await decr.read(chunkLen);
+			bytes = await decr.readNext(chunkLen);
 		}
 		compare(toOneArray(decryptedChunks), content);
 		
-		bytes = await decr.read(10);
+		bytes = await decr.readNext(10);
 		expect(bytes).toBeUndefined();
-		bytes = await decr.read(undefined);
+		bytes = await decr.readNext(undefined);
 		expect(bytes).toBeUndefined();
 	}
 }
@@ -94,27 +94,27 @@ describe(`Function makeDecryptedByteSource`, () => {
 		expect(typeof decr.getPosition).toBe('function');
 		expect(await decr.getPosition()).toBe(0);
 
-		let chunk = await decr.read(200);
+		let chunk = await decr.readNext(200);
 		compare(chunk!, content.subarray(0, 200));
 
 		await decr.seek(3000);
 		expect(await decr.getPosition()).toBe(3000);
-		chunk = await decr.read(200);
+		chunk = await decr.readNext(200);
 		compare(chunk!, content.subarray(3000, 3200));
 
 		await decr.seek(9000);
 		expect(await decr.getPosition()).toBe(9000);
-		chunk = await decr.read(200);
+		chunk = await decr.readNext(200);
 		compare(chunk!, content.subarray(9000, 9200));
 
 		await decr.seek(1000);
 		expect(await decr.getPosition()).toBe(1000);
-		chunk = await decr.read(200);
+		chunk = await decr.readNext(200);
 		compare(chunk!, content.subarray(1000, 1200));
 
-		chunk = await decr.read(undefined);
+		chunk = await decr.readNext(undefined);
 		compare(chunk!, content.subarray(1200));
-		expect(await decr.read(undefined)).toBeUndefined();
+		expect(await decr.readNext(undefined)).toBeUndefined();
 
 		await decr.seek(0);
 		expect(await decr.getPosition()).toBe(0);

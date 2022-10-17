@@ -1,5 +1,5 @@
 /*
- Copyright(c) 2018 - 2021 3NSoft Inc.
+ Copyright(c) 2018 - 2022 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -192,7 +192,7 @@ class SourceFromArray implements ByteSource {
 		Object.seal(this);
 	}
 
-	async read(len: number|undefined): Promise<Uint8Array|undefined> {
+	async readNext(len: number|undefined): Promise<Uint8Array|undefined> {
 		if (len === undefined) {
 			const bytes = this.array.subarray(this.position);
 			this.position += bytes.length;
@@ -205,6 +205,13 @@ class SourceFromArray implements ByteSource {
 		const bytes = this.array.subarray(this.position, this.position+len);
 		this.position += bytes.length;
 		return ((bytes.length === 0) ? undefined : bytes);
+	}
+
+	async readAt(
+		pos: number, len: number|undefined
+	): Promise<Uint8Array|undefined> {
+		await this.seek(pos);
+		return await this.readNext(len);
 	}
 
 	async getSize(): Promise<{ size: number; isEndless: boolean; }> {
@@ -224,7 +231,8 @@ class SourceFromArray implements ByteSource {
 
 	wrap(): ByteSource {
 		const w: ByteSource = {
-			read: this.read.bind(this),
+			readAt: this.readAt.bind(this),
+			readNext: this.readNext.bind(this),
 			getSize: this.getSize.bind(this),
 			getPosition: this.getPosition.bind(this),
 			seek: this.seek.bind(this)

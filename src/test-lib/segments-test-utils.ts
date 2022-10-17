@@ -32,7 +32,7 @@ export async function packSegments(
 		if (s.type === 'base') {
 			expect(s.baseOfs).toBeGreaterThanOrEqual(0);
 			await baseSegs!.seek(s.baseOfs!);
-			bytes = (await baseSegs!.read(s.packedLen))!;
+			bytes = (await baseSegs!.readNext(s.packedLen))!;
 		} else if (s.type === 'new') {
 			expect(s.needPacking).toBe(true);
 			const dataToPack = data.subarray(dataOfs, dataOfs+s.contentLen);

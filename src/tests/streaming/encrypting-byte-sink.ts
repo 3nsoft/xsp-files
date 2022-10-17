@@ -446,4 +446,48 @@ describe(`Encrypting byte sink (underlying version format 1)`, () => {
 			key, zerothNonce, version, c2, expectedContent2, cryptor);
 	});
 
+	itAsync(`removes base completely and writes new bytes`, async () => {
+		const baseSrc = await prepAsBase(await getRandom(16));
+
+		const { byteSink, completion } = await makeSink(baseSrc);
+		let ofs = 0;
+		await byteSink.setSize(ofs);
+
+		const content = await getRandom(40);
+		for (const chunk of [ content.slice(0, 20), content.slice(20) ]) {
+			await byteSink.spliceLayout(ofs, 0, chunk.length);
+			await byteSink.write(ofs, chunk);
+			ofs += chunk.length;
+		}
+		await byteSink.done();
+
+		await compareContent(
+			key, zerothNonce, version, completion, content, cryptor);
+	});
+
+	itAsync(`removes base partially and writes new bytes`, async () => {
+		const baseContent = await getRandom(16);
+		const baseSrc = await prepAsBase(baseContent);
+
+		const { byteSink, completion } = await makeSink(baseSrc);
+		let ofs = 5;
+		await byteSink.setSize(ofs);
+
+		const content = await getRandom(60);
+		content.slice(0, ofs).set(baseContent.slice(0, ofs));
+		await byteSink.spliceLayout(ofs, 0, 40 - ofs);
+		for (const chunk of [ content.slice(ofs, 20), content.slice(20, 40) ]) {
+			await byteSink.write(ofs, chunk);
+			ofs += chunk.length;
+		}
+
+		await byteSink.spliceLayout(ofs, 0, content.length - ofs);
+		await byteSink.write(ofs, content.slice(ofs));
+
+		await byteSink.done();
+
+		await compareContent(
+			key, zerothNonce, version, completion, content, cryptor);
+	});
+
 });

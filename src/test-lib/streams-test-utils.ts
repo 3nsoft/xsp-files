@@ -96,7 +96,7 @@ function startProcessingWriteEvents(
 			for (const chunk of layout.sections) {
 				if (chunk.src !== 'base') { continue; }
 				await base.segSrc.seek(chunk.baseOfs);
-				const baseChunk = await base.segSrc.read(chunk.len);
+				const baseChunk = await base.segSrc.readNext(chunk.len);
 				if (!baseChunk
 				|| (baseChunk.length !== chunk.len)) { throw new Error(
 					`Not enough base segment bytes`); }

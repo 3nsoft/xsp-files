@@ -58,9 +58,7 @@ describe(`Function makeObjSourceFromArrays`, () => {
 
 			// read encrypted bytes from an object source
 			const header = await src.readHeader();
-			await src.segSrc.seek(1).then(() => fail(
-				`This source implementation can't seek`), () => {});
-			const allSegs = await src.segSrc.read(undefined);
+			const allSegs = await src.segSrc.readNext(undefined);
 			expect(allSegs).not.toBeUndefined();
 
 			const reader = await makeSegmentsReader(
@@ -90,7 +88,7 @@ describe(`Function makeObjSourceFromArrays`, () => {
 			.filter(n => (n > 0));
 			const chunkedReads: Uint8Array[] = [];
 			for (let chunkLen of readChunkSizes) {
-				const chunk = (await src.segSrc.read(chunkLen))!;
+				const chunk = (await src.segSrc.readNext(chunkLen))!;
 				chunkedReads.push(chunk);
 			}
 			const allSegs = toOneArray(chunkedReads);
@@ -114,7 +112,7 @@ describe(`Function makeObjSourceFromArrays`, () => {
 		const srcSize = await src.segSrc.getSize();
 		expect(srcSize.isEndless).toBe(false);
 		expect(srcSize.size).toBe(0);
-		expect(await src.segSrc.read(undefined)).toBeUndefined(`cause there is no bytes`);
+		expect(await src.segSrc.readNext(undefined)).toBeUndefined(`cause there is no bytes`);
 		
 		const header = await src.readHeader();
 		
@@ -191,11 +189,11 @@ describe(`Function makeEncryptingObjSource`, () => {
 			const readAmount = Math.floor(len/5);
 			for (let i=0; i<5; i+=1) {
 				encryptedChunks.push(
-					(await src.segSrc.read(readAmount))!);
+					(await src.segSrc.readNext(readAmount))!);
 			}
 			encryptedChunks.push(
-				(await src.segSrc.read(undefined))!);
-			expect(await src.segSrc.read(undefined)).toBeUndefined();
+				(await src.segSrc.readNext(undefined))!);
+			expect(await src.segSrc.readNext(undefined)).toBeUndefined();
 
 			const encrypted = toOneArray(encryptedChunks);
 			expect(encrypted.length).toBe(segsSize.size);
@@ -223,7 +221,7 @@ describe(`Function makeEncryptingObjSource`, () => {
 		const srcSize = await src.segSrc.getSize();
 		expect(srcSize.isEndless).toBe(false);
 		expect(srcSize.size).toBe(0);
-		expect(await src.segSrc.read(undefined)).toBeUndefined();
+		expect(await src.segSrc.readNext(undefined)).toBeUndefined();
 
 		const header = await src.readHeader();
 
@@ -245,7 +243,7 @@ describe(`Function makeEncryptingObjSource`, () => {
 
 		// encrypt without seeking, to compare to seek-and-encrypt
 		const header = await initSrc.readHeader();
-		const segs = await initSrc.segSrc.read(undefined);
+		const segs = await initSrc.segSrc.readNext(undefined);
 
 		// seeking back is not allowed
 		await initSrc.segSrc.seek((await initSrc.segSrc.getPosition()) - 2).then(
@@ -260,8 +258,8 @@ describe(`Function makeEncryptingObjSource`, () => {
 				getRandom, cryptor);
 			const byteSrc = sourceFromArray(content);
 			const src = await makeEncryptingObjSource(byteSrc, restartedSegWriter);
-			await src.segSrc.seek!(offset);
-			const chunk = await src.segSrc.read(undefined);
+			await src.segSrc.seek(offset);
+			const chunk = await src.segSrc.readNext(undefined);
 			compare(chunk!, segs!.subarray(offset), `chunk encrypted after seek should be exactly the same as bytes in initial segments`);
 		}
 	});

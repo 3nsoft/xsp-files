@@ -22,7 +22,8 @@ import { base64urlSafe } from '../utils/buffer-utils';
  * This interface is a copy of web3n.streaming.ByteSource.
  */
 export interface ByteSource {
-	read(len: number|undefined): Promise<Uint8Array|undefined>;
+	readAt(pos: number, len: number|undefined): Promise<Uint8Array|undefined>;
+	readNext(len: number|undefined): Promise<Uint8Array|undefined>;
 	getSize(): Promise<{ size: number; isEndless: boolean; }>;
 	seek(offset: number): Promise<void>;
 	getPosition(): Promise<number>;
