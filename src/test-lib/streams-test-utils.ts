@@ -95,8 +95,9 @@ function startProcessingWriteEvents(
 		if (base) {
 			for (const chunk of layout.sections) {
 				if (chunk.src !== 'base') { continue; }
-				await base.segSrc.seek(chunk.baseOfs);
-				const baseChunk = await base.segSrc.readNext(chunk.len);
+				const baseChunk = await base.segSrc.readAt(
+					chunk.baseOfs, chunk.len
+				);
 				if (!baseChunk
 				|| (baseChunk.length !== chunk.len)) { throw new Error(
 					`Not enough base segment bytes`); }
@@ -110,7 +111,8 @@ function startProcessingWriteEvents(
 
 export async function makeStreamSink(
 	key: Uint8Array, zerothNonce: Uint8Array, version: number,
-	payloadFormat: number, cryptor: AsyncSBoxCryptor, base: ObjSource|undefined
+	payloadFormat: number, cryptor: AsyncSBoxCryptor, workLabel: number,
+	base: ObjSource|undefined
 ): Promise<{ byteSink: ByteSink;
 		completion: Promise<{ header: Uint8Array; allSegs: Uint8Array; }> }> {
 	const segWriter = await makeSegmentsWriter(
@@ -119,7 +121,8 @@ export async function makeStreamSink(
 		(base ?
 			{ type: 'update', base, payloadFormat } :
 			{ type: 'new', segSize: 16, payloadFormat }),
-		getRandom, cryptor);
+		getRandom, cryptor, workLabel
+	);
 	const { sink, sub } = makeEncryptingByteSink(segWriter);
 	const enc$ = Observable.create(sub).pipe(share());
 	const completion = startProcessingWriteEvents(enc$, base);
@@ -129,11 +132,12 @@ export async function makeStreamSink(
 export async function compareContent(
 	key: Uint8Array, zerothNonce: Uint8Array, version: number,
 	completion: Promise<{ header: Uint8Array; allSegs: Uint8Array; }>,
-	expectation: Uint8Array, cryptor: AsyncSBoxCryptor
+	expectation: Uint8Array, cryptor: AsyncSBoxCryptor, workLabel: number
 ): Promise<void> {
 	const { header, allSegs } = await completion;
 	const segReader = await makeSegmentsReader(
-		key, zerothNonce, version, header, cryptor);
+		key, zerothNonce, version, header, cryptor, workLabel
+	);
 	const decrContent = await readSegsSequentially(segReader, allSegs);
 	compare(decrContent, expectation);
 }
@@ -149,12 +153,13 @@ export async function packedBytesToSrc(
 export async function encryptContent(
 	content: Uint8Array,
 	key: Uint8Array, zerothNonce: Uint8Array, version: number,
-	payloadFormat: number, cryptor: AsyncSBoxCryptor
+	payloadFormat: number, cryptor: AsyncSBoxCryptor, workLabel: number
 ): Promise<{ header: Uint8Array; seekableSegsSrc: ByteSource; }> {
 	const segWriter = await makeSegmentsWriter(
 		key, zerothNonce, version,
 		{ type: 'new', segSize: 16, payloadFormat },
-		getRandom, cryptor);
+		getRandom, cryptor, workLabel
+	);
 	segWriter.setContentLength(content.length);
 	const header = await segWriter.packHeader();
 	const allSegs = await packSegments(segWriter, content);
@@ -165,10 +170,11 @@ export async function encryptContent(
 export async function packToObjSrc(
 	content: Uint8Array,
 	key: Uint8Array, zerothNonce: Uint8Array, version: number,
-	payloadFormat: number, cryptor: AsyncSBoxCryptor
+	payloadFormat: number, cryptor: AsyncSBoxCryptor, workLabel: number
 ): Promise<ObjSource> {
 	const { header, seekableSegsSrc: segSrc } = await encryptContent(
-		content, key, zerothNonce, version, payloadFormat, cryptor);
+		content, key, zerothNonce, version, payloadFormat, cryptor, workLabel
+	);
 	return {
 		version,
 		readHeader: async () => header,

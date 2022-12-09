@@ -29,6 +29,7 @@ describe(`Function makeObjSourceFromArrays`, () => {
 	let zerothNonce: Uint8Array;
 	const version = 3;
 	const payloadFormat = 2;
+	const workLabel = 42;
 
 	beforeEachAsync(async () => {
 		key = await getRandom(KEY_LENGTH);
@@ -52,7 +53,8 @@ describe(`Function makeObjSourceFromArrays`, () => {
 			const segWriter = await makeSegmentsWriter(
 				key, zerothNonce, version,
 				{ type: 'new', segSize: 16, payloadFormat },
-				getRandom, cryptor);
+				getRandom, cryptor, workLabel
+			);
 			const src = await makeObjSourceFromArrays(contentChunks, segWriter);
 			expect(await src.segSrc.getSize()).not.toBeUndefined();
 
@@ -62,11 +64,13 @@ describe(`Function makeObjSourceFromArrays`, () => {
 			expect(allSegs).not.toBeUndefined();
 
 			const reader = await makeSegmentsReader(
-				key, zerothNonce, version, header, cryptor);
+				key, zerothNonce, version, header, cryptor, workLabel
+			);
 			const readContent = await readSegsSequentially(reader, allSegs!);
 
 			compare(readContent, content,
-				`Testing content length ${len}. Bytes decrypted from segments should be the same as original encrypted bytes`);
+				`Testing content length ${len}. Bytes decrypted from segments should be the same as original encrypted bytes`
+			);
 		}
 
 		for (const { len, splitPositions } of testGeom) {
@@ -77,7 +81,8 @@ describe(`Function makeObjSourceFromArrays`, () => {
 			const segWriter = await makeSegmentsWriter(
 				key, zerothNonce, version,
 				{ type: 'new', segSize: 16, payloadFormat },
-				getRandom, cryptor);
+				getRandom, cryptor, workLabel
+			);
 			const src = await makeObjSourceFromArrays(contentChunks, segWriter);
 
 			// read encrypted bytes from an object source in chunks
@@ -94,7 +99,8 @@ describe(`Function makeObjSourceFromArrays`, () => {
 			const allSegs = toOneArray(chunkedReads);
 
 			const reader = await makeSegmentsReader(
-				key, zerothNonce, version, header, cryptor);
+				key, zerothNonce, version, header, cryptor, workLabel
+			);
 			const readContent = await readSegsSequentially(reader, allSegs);
 
 			compare(readContent, content,
@@ -106,7 +112,8 @@ describe(`Function makeObjSourceFromArrays`, () => {
 		const segWriter = await makeSegmentsWriter(
 			key, zerothNonce, version,
 			{ type: 'new', segSize: 16, payloadFormat },
-			getRandom, cryptor);
+			getRandom, cryptor, workLabel
+		);
 		const src = await makeObjSourceFromArrays([], segWriter);
 		
 		const srcSize = await src.segSrc.getSize();
@@ -117,7 +124,8 @@ describe(`Function makeObjSourceFromArrays`, () => {
 		const header = await src.readHeader();
 		
 		const segReader = await makeSegmentsReader(
-			key, zerothNonce, version, header, cryptor);
+			key, zerothNonce, version, header, cryptor, workLabel
+		);
 		expect(segReader.segmentsLength).toBe(0);
 	});
 
@@ -159,6 +167,7 @@ describe(`Function makeEncryptingObjSource`, () => {
 	let zerothNonce: Uint8Array;
 	const version = 3;
 	const payloadFormat = 2;
+	const workLabel = 42;
 
 	beforeEachAsync(async () => {
 		key = await getRandom(KEY_LENGTH);
@@ -175,7 +184,8 @@ describe(`Function makeEncryptingObjSource`, () => {
 			const segWriter = await makeSegmentsWriter(
 				key, zerothNonce, version,
 				{ type: 'new', segSize: 16, payloadFormat },
-				getRandom, cryptor);
+				getRandom, cryptor, workLabel
+			);
 			
 			const src = await makeEncryptingObjSource(byteSrc, segWriter);
 			
@@ -199,7 +209,8 @@ describe(`Function makeEncryptingObjSource`, () => {
 			expect(encrypted.length).toBe(segsSize.size);
 			
 			const segReader = await makeSegmentsReader(
-				key, zerothNonce, version, header, cryptor);
+				key, zerothNonce, version, header, cryptor, workLabel
+			);
 			expect(segReader.isEndlessFile).toBe(false, `Making object from a byte array in one step, naturally, should produce an object with finite size.`);
 			const readContent = await readSegsSequentially(segReader, encrypted);
 			compare(readContent, content,
@@ -215,7 +226,8 @@ describe(`Function makeEncryptingObjSource`, () => {
 		const segWriter = await makeSegmentsWriter(
 			key, zerothNonce, version,
 			{ type: 'new', segSize: 16, payloadFormat },
-			getRandom, cryptor);
+			getRandom, cryptor, workLabel
+		);
 		const src = await makeEncryptingObjSource(byteSrc, segWriter);
 
 		const srcSize = await src.segSrc.getSize();
@@ -226,7 +238,8 @@ describe(`Function makeEncryptingObjSource`, () => {
 		const header = await src.readHeader();
 
 		const segReader = await makeSegmentsReader(
-			key, zerothNonce, version, header, cryptor);
+			key, zerothNonce, version, header, cryptor, workLabel
+		);
 		expect(segReader.segmentsLength).toBe(0);
 	});
 
@@ -237,7 +250,8 @@ describe(`Function makeEncryptingObjSource`, () => {
 		const newSegWriter = await makeSegmentsWriter(
 			key, zerothNonce, version,
 			{ type: 'new', segSize: 16, payloadFormat },
-			getRandom, cryptor);
+			getRandom, cryptor, workLabel
+		);
 
 		const initSrc = await makeEncryptingObjSource(initByteSrc, newSegWriter);
 
@@ -246,16 +260,19 @@ describe(`Function makeEncryptingObjSource`, () => {
 		const segs = await initSrc.segSrc.readNext(undefined);
 
 		// seeking back is not allowed
-		await initSrc.segSrc.seek((await initSrc.segSrc.getPosition()) - 2).then(
+		await initSrc.segSrc.seek((await initSrc.segSrc.getPosition()) - 2)
+		.then(
 			() => fail(`Current implementation doesn't allow seeking back`),
-			() => {});
+			() => {}
+		);
 
 		// seeking forward works
 		for (const offset of [ 0, 4*1024, 4*1024+15 ]) {
 			const restartedSegWriter = await makeSegmentsWriter(
 				key, zerothNonce, version,
 				{ type: 'restart', header },
-				getRandom, cryptor);
+				getRandom, cryptor, workLabel
+			);
 			const byteSrc = sourceFromArray(content);
 			const src = await makeEncryptingObjSource(byteSrc, restartedSegWriter);
 			await src.segSrc.seek(offset);

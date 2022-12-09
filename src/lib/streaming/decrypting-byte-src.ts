@@ -22,13 +22,11 @@ import { assert } from '../utils/assert';
 
 
 class DecryptingByteSource implements ByteSource {
-	
-	private segIter: IterableIterator<SegmentInfo>|undefined =
-		undefined;
-	private seg: SegmentInfo|undefined = undefined;
-	private posInSeg = 0;
-	private bufferedSeg: Uint8Array|undefined = undefined;
-	
+
+	private contentPosition = 0;
+	private currentRead: Promise<ReadProcResult>|undefined = undefined;
+	private buffered: BufferedOpenedSeg|undefined = undefined;
+
 	constructor(
 		private readonly segsSrc: ByteSource,
 		private readonly segReader: SegmentsReader
@@ -50,47 +48,17 @@ class DecryptingByteSource implements ByteSource {
 		return w;
 	}
 
-	private get contentPosition(): number {
-		if (!this.seg) { return 0; }
-		return this.seg.contentOfs + this.posInSeg;
-	}
-
 	async getPosition(): Promise<number> {
 		return this.contentPosition;
 	}
 
 	async seek(offset: number): Promise<void> {
-		if (offset === this.contentPosition) { return; }
-
 		assert(Number.isInteger(offset) && (offset >= 0)
 			&& (this.segReader.isEndlessFile || (offset <= this.segReader.contentLength!)),
-			`Given offset ${offset} is out of bounds.`);
-
-		// special case of seeking to the very end
-		if (!this.segReader.isEndlessFile
-		&& (offset === this.segReader.contentLength)) {
-			assert(this.segReader.contentLength > 0);
-			await this.seek(this.segReader.contentLength-1);
-			this.posInSeg += 1;
-			return;
-		}
-
-		const l = this.segReader.locateContentOfs(offset);
-
-		if (this.seg && (this.seg.chain === l.chain)
-		&& (this.seg.seg === l.seg)) {
-			this.posInSeg = l.posInSeg;
-			return;
-		}
-
-		const iter = this.segReader.segmentInfos(l);
-		const { done, value } = iter.next() as IteratorResult<SegmentInfo, SegmentInfo>;
-		assert(!done, `Unexpected end of iteration`);
-
-		this.segIter = iter;
-		this.seg = value;
-		this.bufferedSeg = undefined;
-		this.posInSeg = l.posInSeg;
+			`Given offset ${offset} is out of bounds.`
+		);
+		this.ensureNotReadingNow();
+		this.contentPosition = offset;
 	}
 
 	async getSize(): Promise<{ size: number; isEndless: boolean; }> {
@@ -100,15 +68,21 @@ class DecryptingByteSource implements ByteSource {
 		};
 	}
 
-	readNext(len: number|undefined): Promise<Uint8Array|undefined> {
-		if (!this.segIter) {
-			this.segIter = this.segReader.segmentInfos();
-		}
-		if (len === undefined) {
-			return this.readToTheEnd();
-		} else {
+	async readNext(len: number|undefined): Promise<Uint8Array|undefined> {
+		if (len !== undefined) {
 			assert(Number.isInteger(len) && (len > 0), `Invalid length given`);
-			return this.readLimitedLen(len);
+		}
+		this.ensureNotReadingNow();
+		this.currentRead = this.startReadProcAt(this.contentPosition, len);
+		try {
+			const { opened, tail } = await this.currentRead;
+			if (opened) {
+				this.contentPosition += opened.length;
+			}
+			this.buffered = tail;
+			return opened;
+		} finally {
+			this.currentRead = undefined;
 		}
 	}
 
@@ -119,94 +93,212 @@ class DecryptingByteSource implements ByteSource {
 		return await this.readNext(len);
 	}
 
-	private async readToTheEnd(): Promise<Uint8Array|undefined> {
-		const chunks: Uint8Array[] = [];
-
-		// read from current seg, if position allows
-		if (this.seg && (this.posInSeg < this.seg.contentLen)) {
-			if (!this.bufferedSeg) {
-				this.bufferedSeg = await this.readAndDecryptSeg();
-			}
-			const extract = ((this.posInSeg === 0) ?
-				this.bufferedSeg : this.bufferedSeg.subarray(this.posInSeg));
-			chunks.push(extract);
-			this.posInSeg = this.bufferedSeg.length;
+	private ensureNotReadingNow(): void {
+		if (this.currentRead) {
+			throw Error(`Decrypting byte source is currently performing read operation, wait till its completion`);
 		}
-
-		// move to next segments
-		let { done, value: nextSeg } = this.segIter!.next() as IteratorResult<SegmentInfo, SegmentInfo>;
-		while (!done) {
-			this.seg = nextSeg;
-			this.posInSeg = 0;
-			this.bufferedSeg = await this.readAndDecryptSeg();
-			chunks.push(this.bufferedSeg);
-			this.posInSeg = this.bufferedSeg.length;
-			({ done, value: nextSeg } = this.segIter!.next()) as IteratorResult<SegmentInfo, SegmentInfo>;
-		}
-
-		return joinByteArrays(chunks);
 	}
 
-	private async readLimitedLen(len: number): Promise<Uint8Array|undefined> {
-		const chunks: Uint8Array[] = [];
+	private startReadProcAt(
+		contentOfs: number, len: number|undefined
+	): Promise<ReadProcResult> {
+		if (contentOfs === 0) {
+			const iter = this.segReader.segmentInfos();
+			this.buffered = undefined;
+			return this.readSegsAndDecrypt(iter, len);
+		}
+		if (this.segReader.contentFiniteLength <= contentOfs) {
+			return Promise.resolve({});
+		}
 
-		// read from current seg, if position allows
-		if (this.seg && (this.posInSeg < this.seg.contentLen)) {
-			if (!this.bufferedSeg) {
-				this.bufferedSeg = await this.readAndDecryptSeg();
-			}
-	
-			const available = this.bufferedSeg.length - this.posInSeg;
-			if (available >= len) {
-				const extract = this.bufferedSeg.subarray(
-					this.posInSeg, this.posInSeg + len);
-				this.posInSeg += len;
-				return extract;
+		const l = this.segReader.locateContentOfs(contentOfs);
+		const iter = this.segReader.segmentInfos(l);
+		let fstOpenedSeg: Uint8Array|undefined = undefined;
+		let posInFstEncryptedSeg: number|undefined = undefined;
+		if (this.buffered) {
+			const { chain, seg } = this.buffered.seg;
+			if ((l.chain === chain) && (l.seg === seg)) {
+				iter.next();	// skip first, as it is already buffered
+				fstOpenedSeg = this.buffered.bytes.subarray(l.posInSeg);
+				if (len && (len <= fstOpenedSeg.length)) {
+					const opened = fstOpenedSeg.subarray(0, len);
+					const tail = this.buffered;
+					this.buffered = undefined;
+					return Promise.resolve({ opened, tail });
+				}
 			} else {
-				const extract = ((this.posInSeg === 0) ?
-					this.bufferedSeg : this.bufferedSeg.subarray(this.posInSeg));
-				chunks.push(extract);
-				this.posInSeg = this.bufferedSeg.length;
-				len -= extract.length;
+				posInFstEncryptedSeg = l.posInSeg;
+			}
+			this.buffered = undefined;
+		}
+
+		this.segReader.contentLength
+
+		return this.readSegsAndDecrypt(
+			iter, len, fstOpenedSeg, posInFstEncryptedSeg
+		);
+	}
+
+	private async readSegsAndDecrypt(
+		segIter: IterableIterator<SegmentInfo>, len: number|undefined,
+		fstOpenedSeg?: Uint8Array, posInFstSeg = 0
+	): Promise<ReadProcResult> {
+		const openedSegs: Uint8Array[] = [];
+		let adjustFstSeg: boolean;
+		if (fstOpenedSeg) {
+			openedSegs.push(fstOpenedSeg);
+			if (len !== undefined) {
+				len -= fstOpenedSeg.length;
+				assert(len > 0);
+			}
+			adjustFstSeg = false;
+		} else {
+			adjustFstSeg = (posInFstSeg !== 0);
+		}
+
+		let lastSeg: SegmentInfo|undefined = undefined;
+		for (const {
+			packedSegs: { ofs: chunkOfs, len: lenToRead }, segInfos
+		} of byContinuouslyPackedSections(segIter, len, PACKED_READ_CHUNK_LEN)) {
+			const chunkWithPacked = (await this.segsSrc.readAt(
+				chunkOfs, lenToRead
+			))!;
+			assert(!!chunkWithPacked);
+			while (segInfos.length > 0) {
+				const batchSize = this.segReader.canStartNumOfOpeningOps();
+				if ((batchSize <= 1) || (segInfos.length < 2)) {
+					const segInfo = segInfos.shift()!;
+					let openedSeg = await this.openSeg(
+						segInfo, chunkWithPacked, chunkOfs
+					);
+					openedSegs.push(openedSeg);
+					if (len !== undefined) {
+						len -= openedSeg.length;
+					}
+					lastSeg = segInfo;
+				} else {
+					const segsToOpen = segInfos.splice(
+						0, Math.min(segInfos.length, batchSize)
+					);
+					const openedBatch = await Promise.all(segsToOpen.map(
+						segInfo => this.openSeg(segInfo, chunkWithPacked, chunkOfs)
+					));
+					openedSegs.push(...openedBatch);
+					if (len !== undefined) {
+						len -= totalLengthOf(openedBatch);
+					}
+					lastSeg = segsToOpen[segsToOpen.length-1];
+				}
 			}
 		}
 
-		// move to next segments
-		let { done, value: nextSeg } = this.segIter!.next() as IteratorResult<SegmentInfo, SegmentInfo>;
-		while (!done) {
-			this.seg = nextSeg;
-			this.posInSeg = 0;
-			this.bufferedSeg = await this.readAndDecryptSeg();
-
-			if (this.bufferedSeg.length > len) {
-				const extract = this.bufferedSeg.subarray(0, len);
-				this.posInSeg += len;
-				chunks.push(extract);
-				return joinByteArrays(chunks);
-			} else {
-				chunks.push(this.bufferedSeg);
-				this.posInSeg = this.bufferedSeg.length;
-				len -= this.bufferedSeg.length;
+		let tail: ReadProcResult['tail'] = undefined;
+		if (openedSegs.length === 1) {
+			const openedSeg = openedSegs[0];
+			if (adjustFstSeg) {
+				openedSegs[0] = openedSeg.subarray(posInFstSeg);
+				if (len !== undefined) {
+					len += posInFstSeg;
+				}
 			}
+			if ((len !== undefined) && (len < 0)) {
+				const lastOpened = openedSegs[0];
+				tail = { seg: lastSeg!, bytes: openedSeg };
+				const lenForRead = lastOpened.length + len;
+				assert(lenForRead > 0);
+				openedSegs[0] = lastOpened.subarray(0, lenForRead);	
+			}
+		} else if (openedSegs.length > 1) {
+			if (adjustFstSeg) {
+				openedSegs[0] = openedSegs[0].subarray(posInFstSeg);
+				if (len !== undefined) {
+					len += posInFstSeg;
+				}
+			}
+			if ((len !== undefined) && (len < 0)) {
+				const lastOpened = openedSegs[openedSegs.length-1];
+				tail = { seg: lastSeg!, bytes: lastOpened };
+				const lenForRead = lastOpened.length + len;
+				assert(lenForRead > 0);
+				openedSegs[openedSegs.length-1] = lastOpened.subarray(
+					0, lenForRead
+				);	
+			}
+		}
+		return {
+			opened: joinByteArrays(openedSegs),
+			tail
+		};
+	}
 
-			if (len > 0) {
-				({ done, value: nextSeg } = this.segIter!.next() as IteratorResult<SegmentInfo, SegmentInfo>);
+	private openSeg(
+		segInfo: SegmentInfo, chunkWithPacked: Uint8Array, chunkOfs: number
+	): Promise<Uint8Array> {
+		const ofsInEncrSegs = segInfo.packedOfs - chunkOfs;
+		const packedSeg = chunkWithPacked.subarray(
+			ofsInEncrSegs, ofsInEncrSegs + segInfo.packedLen
+		);
+		return this.segReader.openSeg(segInfo, packedSeg);
+	}
+
+}
+Object.freeze(DecryptingByteSource.prototype);
+Object.freeze(DecryptingByteSource);
+
+
+interface BufferedOpenedSeg {
+	seg: SegmentInfo;
+	bytes: Uint8Array;
+}
+
+interface ReadProcResult {
+	opened?: Uint8Array;
+	tail?: BufferedOpenedSeg;
+}
+
+const PACKED_READ_CHUNK_LEN = 256 * 1024;
+
+function* byContinuouslyPackedSections(
+	segIter: IterableIterator<SegmentInfo>, contentLen: number|undefined,
+	packedChunkLen: number
+): Generator<{
+	packedSegs: { ofs: number; len: number; },
+	segInfos: SegmentInfo[];
+}> {
+	let segInfos: SegmentInfo[] = [];
+	let ofs = -1;
+	let len = -1;
+	for (const s of segIter) {
+		if ((ofs + len) === s.packedOfs) {
+			if ((len + s.packedLen) > packedChunkLen) {
+				yield { packedSegs: { ofs, len }, segInfos };
+				ofs = s.packedOfs;
+				len = s.packedLen;
+				segInfos = [ s ];
 			} else {
+				len += s.packedLen;
+				segInfos.push(s);	
+			}
+		} else if (segInfos.length === 0) {
+			ofs = s.packedOfs;
+			len = s.packedLen;
+			segInfos.push(s);
+		} else {
+			yield { packedSegs: { ofs, len }, segInfos };
+			ofs = s.packedOfs;
+			len = s.packedLen;
+			segInfos = [ s ];
+		}
+		if (contentLen !== undefined) {
+			contentLen -= s.contentLen;
+			if (contentLen <= 0) {
 				break;
 			}
 		}
-
-		return joinByteArrays(chunks);
 	}
-
-	private async readAndDecryptSeg(): Promise<Uint8Array> {
-		await this.segsSrc.seek(this.seg!.packedOfs);
-		const segBytes = await this.segsSrc.readNext(this.seg!.packedLen);
-		if (!segBytes) { throw new Error(
-			`EOF: source of packed segments unexpectidly ended`); }
-		return await this.segReader.openSeg(this.seg!, segBytes);
+	if (segInfos.length > 0) {
+		yield { packedSegs: { ofs, len }, segInfos };
 	}
-
 }
 
 function joinByteArrays(arrs: Uint8Array[]): Uint8Array|undefined {
@@ -229,8 +321,6 @@ function totalLengthOf(arrs: Uint8Array[]): number {
 	return len;
 }
 
-/**
- */
 export function makeDecryptedByteSource(
 	segsSrc: ByteSource, segReader: SegmentsReader
 ): ByteSource {

@@ -1,5 +1,5 @@
 /*
- Copyright(c) 2017, 2021 3NSoft Inc.
+ Copyright(c) 2017, 2021 - 2022 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -20,12 +20,28 @@ import { makeUint8ArrayCopy } from "./buffer-utils";
 export interface AsyncSBoxCryptor {
 
 	/**
+	 * This returns a number of requests that will be immediately accepted for
+	 * execution.
+	 * For new work labels, cryptor will always return a non-zero value to
+	 * encourage scheduling, while work labels with existing queued requests may
+	 * see zero as a suggestion to await existing outstanding request(s), cause
+	 * the new ones will be just queued.
+	 * @param workLabel is an integer work label for which cryptor returns a
+	 * number of a work requests it can accept for an immediate execution.
+	 */
+	canStartUnderWorkLabel(workLabel: number): number;
+
+	/**
 	 * This returns a promise, resolvable to Uint8Array with opened message.
 	 * @param c is Uint8Array of cipher bytes that need to be opened.
 	 * @param n is Uint8Array, 24 bytes long nonce.
 	 * @param k is Uint8Array, 32 bytes long secret key.
+	 * @param workLabel is an integer label allowing cryptor to schedule work
+	 * that belongs to the same logical group.
 	 */
-	open(c: Uint8Array, n: Uint8Array, k: Uint8Array): Promise<Uint8Array>;
+	open(
+		c: Uint8Array, n: Uint8Array, k: Uint8Array, workLabel: number
+	): Promise<Uint8Array>;
 
 	/**
 	 * This returns a promise, resolvable to Uint8Array with resulting cipher of
@@ -34,8 +50,12 @@ export interface AsyncSBoxCryptor {
 	 * @param m is Uint8Array of message bytes that need to be encrypted.
 	 * @param n is Uint8Array, 24 bytes long nonce.
 	 * @param k is Uint8Array, 32 bytes long secret key.
+	 * @param workLabel is an integer label allowing cryptor to schedule work
+	 * that belongs to the same logical group.
 	 */
-	pack(m: Uint8Array, n: Uint8Array, k: Uint8Array): Promise<Uint8Array>;
+	pack(
+		m: Uint8Array, n: Uint8Array, k: Uint8Array, workLabel: number
+	): Promise<Uint8Array>;
 
 	formatWN: {
 
@@ -47,16 +67,24 @@ export interface AsyncSBoxCryptor {
 		 * @param m is Uint8Array of message bytes that need to be encrypted.
 		 * @param n is Uint8Array, 24 bytes long nonce.
 		 * @param k is Uint8Array, 32 bytes long secret key.
+		 * @param workLabel is an integer label allowing cryptor to schedule work
+		 * that belongs to the same logical group.
 		 */
-		pack(m: Uint8Array, n: Uint8Array, k: Uint8Array): Promise<Uint8Array>;
+		pack(
+			m: Uint8Array, n: Uint8Array, k: Uint8Array, workLabel: number
+		): Promise<Uint8Array>;
 
 		/**
 		 * This returns a promise, resolvable to Uint8Array with opened message.
 		 * @param cn is Uint8Array with nonce and cipher bytes that need to be
 		 * opened.
 		 * @param k is Uint8Array, 32 bytes long secret key.
+		 * @param workLabel is an integer label allowing cryptor to schedule work
+		 * that belongs to the same logical group.
 		 */
-		open(cn: Uint8Array, k: Uint8Array): Promise<Uint8Array>;
+		open(
+			cn: Uint8Array, k: Uint8Array, workLabel: number
+		): Promise<Uint8Array>;
 	};
 
 }

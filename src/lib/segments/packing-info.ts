@@ -18,13 +18,13 @@
 import { SegId, Locations, SegsInfo, headerContentFor, SegsChainInfo, FiniteSegsChainInfo, InfoExtender, EndlessSegsChainInfo } from './xsp-info';
 import { calculateNonce, NONCE_LENGTH } from '../utils/crypt-utils';
 import { Layout, LayoutBaseSection, LayoutNewSection } from '../streaming/common';
-import { secret_box } from 'ecma-nacl';
 import { assert } from '../utils/assert';
 import { copy } from '../utils/json-utils';
 import { RNG, BaseBytesInfo, WritableSegmentInfo, NewSegmentInfo, BaseSegmentInfo, writeExc } from './writer';
 import { NewSegments } from './new-segments';
 
-const { POLY_LENGTH } = secret_box;
+// NaCl's constant with the length of poly mac section.
+const POLY_LENGTH = 16;
 
 type NewSegsChainInfo = SegsChainInfo & {
 	type: 'new';

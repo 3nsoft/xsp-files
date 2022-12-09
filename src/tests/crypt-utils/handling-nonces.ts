@@ -30,12 +30,14 @@ describe('Header nonce', () => {
 	const zerothHeaderNonce = getRandomSync(NONCE_LENGTH);
 	const version = 7;
 	const payloadFormat = 2;
+	const workLabel = 42;
 	
 	itAsync('is related to initial zeroth nonce via version', async () => {
 		const writer = await makeSegmentsWriter(
 			key, zerothHeaderNonce, version,
 			{ type: 'new', segSize: segSizein256bs, payloadFormat },
-			getRandom, cryptor);
+			getRandom, cryptor, workLabel
+		);
 
 		const segs = await packSegments(writer, data);
 		const header = await writer.packHeader();
@@ -45,7 +47,8 @@ describe('Header nonce', () => {
 		expect(compareVectors(zNonce, zerothHeaderNonce)).toBe(true);
 
 		const reader = await makeSegmentsReader(
-			key, zNonce, version, header, cryptor);
+			key, zNonce, version, header, cryptor, workLabel
+		);
 		const d = await readSegsSequentially(reader, segs);
 		expect(compareVectors(d, data)).toBe(true);
 	});

@@ -24,14 +24,16 @@ const cryptor = mockCryptor();
 
 async function testDecrObjSrc(
 	key: Uint8Array, zerothNonce: Uint8Array, version: number,
-	payloadFormat: number, content: Uint8Array
+	payloadFormat: number, content: Uint8Array, workLabel: number
 ): Promise<void> {
 
 	const { header, seekableSegsSrc } = await encryptContent(
-		content, key, zerothNonce, version, payloadFormat, cryptor);
+		content, key, zerothNonce, version, payloadFormat, cryptor, workLabel
+	);
 
 	const segReader = await makeSegmentsReader(
-		key, zerothNonce, version, header, cryptor);
+		key, zerothNonce, version, header, cryptor, workLabel
+	);
 	expect(segReader.formatVersion).toBe(1);
 	expect(segReader.payloadFormat).toBe(payloadFormat);
 
@@ -75,6 +77,7 @@ describe(`Function makeDecryptedByteSource`, () => {
 	let zerothNonce: Uint8Array;
 	const version = 3;
 	const payloadFormat = 2;
+	const workLabel = 42;
 
 	beforeEachAsync(async () => {
 		key = await getRandom(KEY_LENGTH);
@@ -84,19 +87,21 @@ describe(`Function makeDecryptedByteSource`, () => {
 	itAsync(`produces seekable byte source`, async () => {
 		const content = await getRandom(12*1024+3);
 		const { header, seekableSegsSrc } = await encryptContent(
-			content, key, zerothNonce, version, payloadFormat, cryptor);
+			content, key, zerothNonce, version, payloadFormat, cryptor, workLabel
+		);
 
 		const segReader = await makeSegmentsReader(
-			key, zerothNonce, version, header, cryptor);
+			key, zerothNonce, version, header, cryptor, workLabel
+		);
 		const decr = makeDecryptedByteSource(seekableSegsSrc, segReader);
 
-		expect(typeof decr.seek).toBe('function', 'decrypting source should be seekable');
+		expect(typeof decr.seek)
+		.toBe('function', 'decrypting source should be seekable');
 		expect(typeof decr.getPosition).toBe('function');
 		expect(await decr.getPosition()).toBe(0);
 
 		let chunk = await decr.readNext(200);
 		compare(chunk!, content.subarray(0, 200));
-
 		await decr.seek(3000);
 		expect(await decr.getPosition()).toBe(3000);
 		chunk = await decr.readNext(200);
@@ -123,10 +128,15 @@ describe(`Function makeDecryptedByteSource`, () => {
 	});
 
 	itAsync(`produces source that decrypts empty and non-empty object`, async () => {
-		for (const len of [ 0, 256, 4*1024+250, 2*4*1024+950, 100345 ]) {
+		for (const len of [
+			0, 256,
+			4*1024+250, 2*4*1024+950, 100345,
+			3*256*1024-11, 3*256*1024, 3*256*1024+11,
+		]) {
 			const content = await getRandom(len);
 			await testDecrObjSrc(
-				key, zerothNonce, version, payloadFormat, content);
+				key, zerothNonce, version, payloadFormat, content, workLabel
+			);
 		}
 	});
 

@@ -71,6 +71,7 @@ describe(`Encrypting byte sink (underlying version format 1)`, () => {
 	let zerothNonce: Uint8Array;
 	const version = 3;
 	const payloadFormat = 2;
+	const workLabel = 42;
 
 	beforeEachAsync(async () => {
 		key = await getRandom(KEY_LENGTH);
@@ -82,7 +83,8 @@ describe(`Encrypting byte sink (underlying version format 1)`, () => {
 	): Promise<{ byteSink: ByteSink;
 			completion: Promise<{ header: Uint8Array; allSegs: Uint8Array; }> }> {
 		return makeStreamSink(
-			key, zerothNonce, version, payloadFormat, cryptor, base);
+			key, zerothNonce, version, payloadFormat, cryptor, workLabel, base
+		);
 	}
 
 	async function testSequentialWriting(
@@ -115,7 +117,8 @@ describe(`Encrypting byte sink (underlying version format 1)`, () => {
 
 		// decrypt bytes and compare to original content
 		const segReader = await makeSegmentsReader(
-			key, zerothNonce, version, header, cryptor);
+			key, zerothNonce, version, header, cryptor, workLabel
+		);
 		const decrContent = await readSegsSequentially(segReader, allSegs);
 		compare(decrContent, content);
 	}
@@ -158,7 +161,8 @@ describe(`Encrypting byte sink (underlying version format 1)`, () => {
 		await checkAllNewBytesLayout(byteSink, content.length);
 
 		await compareContent(
-			key, zerothNonce, version, completion, content, cryptor);
+			key, zerothNonce, version, completion, content, cryptor, workLabel
+		);
 	});
 
 	async function prepAsBase(content: Uint8Array): Promise<ObjSource> {
@@ -166,7 +170,8 @@ describe(`Encrypting byte sink (underlying version format 1)`, () => {
 		const segWriter = await makeSegmentsWriter(
 			key, zerothNonce, baseVersion,
 			{ type: 'new', segSize: 16, payloadFormat },
-			getRandom, cryptor);
+			getRandom, cryptor, workLabel
+		);
 		const segs = await packSegments(segWriter, content);
 		const header = await segWriter.packHeader();
 		return objSrcFromArrays(baseVersion, header, segs);
@@ -207,7 +212,9 @@ describe(`Encrypting byte sink (underlying version format 1)`, () => {
 			cut1.ofs + cut1.del);
 
 		await compareContent(
-			key, zerothNonce, version, completion, expectedContent, cryptor);
+			key, zerothNonce, version, completion, expectedContent,
+			cryptor, workLabel
+		);
 	});
 
 	itAsync(`splices base in few places and writes new bytes`, async () => {
@@ -257,7 +264,9 @@ describe(`Encrypting byte sink (underlying version format 1)`, () => {
 		await byteSink.done();
 
 		await compareContent(
-			key, zerothNonce, version, completion, expectedContent, cryptor);
+			key, zerothNonce, version, completion, expectedContent,
+			cryptor, workLabel
+		);
 	});
 
 	itAsync(`splices base version, freezes layout and writes new bytes`, async () => {
@@ -297,7 +306,9 @@ describe(`Encrypting byte sink (underlying version format 1)`, () => {
 			cut1.ofs + cut1.del);
 
 		await compareContent(
-			key, zerothNonce, version, completion, expectedContent, cryptor);
+			key, zerothNonce, version, completion, expectedContent,
+			cryptor, workLabel
+		);
 	});
 
 	itAsync(`splices base in few places, freezes layout and writes new bytes`, async () => {
@@ -350,7 +361,9 @@ describe(`Encrypting byte sink (underlying version format 1)`, () => {
 		await byteSink.done();
 
 		await compareContent(
-			key, zerothNonce, version, completion, expectedContent, cryptor);
+			key, zerothNonce, version, completion, expectedContent,
+			cryptor, workLabel
+		);
 	});
 
 	itAsync(`splices base like sink with attrs does`, async () => {
@@ -387,7 +400,9 @@ describe(`Encrypting byte sink (underlying version format 1)`, () => {
 			initChunk, baseBytes.subarray(30, 9100)
 		]);
 		await compareContent(
-			key, zerothNonce, version, completion, expectedContent, cryptor);
+			key, zerothNonce, version, completion, expectedContent,
+			cryptor, workLabel
+		);
 	});
 
 	itAsync(`supports file sink use pattern (scenario 1)`, async () => {
@@ -411,7 +426,8 @@ describe(`Encrypting byte sink (underlying version format 1)`, () => {
 
 		const expectedContent1 = joinByteArrs([ chunk1, chunk2, tail1 ]);
 		await compareContent(
-			key, zerothNonce, version, c1, expectedContent1, cryptor);
+			key, zerothNonce, version, c1, expectedContent1, cryptor, workLabel
+		);
 
 		const baseForS2 = await packedBytesToSrc(2, c1);
 		const { byteSink: s2, completion: c2 } = await makeSink(baseForS2);
@@ -443,7 +459,8 @@ describe(`Encrypting byte sink (underlying version format 1)`, () => {
 			chunk1.subarray(0, 5000), chunk1.subarray(9000), chunk2, tail2
 		]);
 		await compareContent(
-			key, zerothNonce, version, c2, expectedContent2, cryptor);
+			key, zerothNonce, version, c2, expectedContent2, cryptor, workLabel
+		);
 	});
 
 	itAsync(`removes base completely and writes new bytes`, async () => {
@@ -462,7 +479,8 @@ describe(`Encrypting byte sink (underlying version format 1)`, () => {
 		await byteSink.done();
 
 		await compareContent(
-			key, zerothNonce, version, completion, content, cryptor);
+			key, zerothNonce, version, completion, content, cryptor, workLabel
+		);
 	});
 
 	itAsync(`removes base partially and writes new bytes`, async () => {
@@ -487,7 +505,8 @@ describe(`Encrypting byte sink (underlying version format 1)`, () => {
 		await byteSink.done();
 
 		await compareContent(
-			key, zerothNonce, version, completion, content, cryptor);
+			key, zerothNonce, version, completion, content, cryptor, workLabel
+		);
 	});
 
 });

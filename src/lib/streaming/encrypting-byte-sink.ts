@@ -25,7 +25,7 @@ import { makeUint8ArrayCopy } from '../utils/buffer-utils';
 class EncryptingByteSink implements ByteSink {
 
 	private encOutput: Observer<EncrEvent>|undefined = undefined;
-	private backpressure: (() => Promise<void>)|undefined = undefined;
+	private backpressureOnOutput: (() => Promise<void>)|undefined = undefined;
 	private isCompleted = false;
 	private buffer = new ChunksBuffer();
 	private biggestContentOfs: number;
@@ -78,7 +78,7 @@ class EncryptingByteSink implements ByteSink {
 			`Given output observer must have all methods for use here`); }
 		this.encOutput = obs;
 		if (typeof backpressure === 'function') {
-			this.backpressure = backpressure;
+			this.backpressureOnOutput = backpressure;
 		}
 		return this.stopAndSetCompleted.bind(this);
 	}
@@ -152,8 +152,8 @@ class EncryptingByteSink implements ByteSink {
 			}
 
 			const header = await this.segWriter.packHeader();
-			if (this.backpressure) {
-				await this.backpressure();
+			if (this.backpressureOnOutput) {
+				await this.backpressureOnOutput();
 			}
 			const ev: HeaderEncrEvent = {
 				type: 'header',
@@ -228,8 +228,29 @@ class EncryptingByteSink implements ByteSink {
 			if (this.reencryptSegs && (wholeSections.length > 0)) {
 				await this.reencryptSegs.packBeforeSeg(wholeSections[0][0]);
 			}
-			for (let s of wholeSections) {
-				await this.packAndOutSeg(s[0], s[1]);
+
+			while (wholeSections.length > 0) {
+				const batchSize = this.segWriter.canStartNumOfPackOps();
+				if ((batchSize <= 1) || (wholeSections.length < 2)) {
+					const segToPack = wholeSections.shift()!;
+					await this.packAndOutSeg(segToPack[0], segToPack[1]);
+				} else {
+					const segsToPack = wholeSections.splice(
+						0, Math.min(wholeSections.length, batchSize)
+					);
+					const encrEvents = await Promise.all(segsToPack.map(async ([
+						segInfo, content
+					]): Promise<EncrEvent> => {
+						const seg = await this.segWriter.packSeg(content, segInfo);
+						return { type: 'seg', seg, segInfo };
+					}));
+					if (this.backpressureOnOutput) {
+						await this.backpressureOnOutput();
+					}
+					for (const ev of encrEvents) {
+						this.encOutput!.next!(ev);
+					}
+				}
 			}
 		} catch (err) {
 			await this.done(err);
@@ -248,8 +269,8 @@ class EncryptingByteSink implements ByteSink {
 		segInfo: NewSegmentInfo, content: Uint8Array
 	): Promise<void> {
 		const seg = await this.segWriter.packSeg(content, segInfo);
-		if (this.backpressure) {
-			await this.backpressure();
+		if (this.backpressureOnOutput) {
+			await this.backpressureOnOutput();
 		}
 		this.encOutput!.next!({ type: 'seg', seg, segInfo });
 	}
@@ -265,11 +286,9 @@ class EncryptingByteSink implements ByteSink {
 			const tailChunk = this.buffer.extractTail();
 			if (tailChunk) {
 				const pos = this.segWriter.locateContentOfs(tailChunk.start);
-				if (pos.posInSeg !== 0) { throw new Error(
-					`There are missing bytes`); }
-				const segInfo = this.segWriter.segmentInfo(pos);
-				if (segInfo.type !== 'new') { throw new Error(
-					`Unexpected not-new segment`); }
+				assert(pos.posInSeg === 0);
+				const segInfo = this.segWriter.segmentInfo(pos) as NewSegmentInfo;
+				assert(segInfo.type === 'new');
 				await this.packAndOutSeg(segInfo, tailChunk.bytes);
 			}
 		}

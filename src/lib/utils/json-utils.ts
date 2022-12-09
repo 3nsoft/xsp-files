@@ -40,15 +40,15 @@ export function copy<T>(orig: T, excludeTopFields?: string[]): T {
 		return (c as any);
 	} else {
 		const c = ({} as T);
-		const fields = Object.keys(orig);
+		const fields = Object.keys(orig!);
 		if (excludeTopFields) {
 			for (const f of fields) {
 				if (excludeTopFields.includes(f)) { continue; }
-				c[f] = copy<any>(orig[f]);
+				c[f] = copy(orig![f]);
 			}
 		} else {
 			for (const f of fields) {
-				c[f] = copy<any>(orig[f]);
+				c[f] = copy<any>(orig![f]);
 			}
 		}
 		return c;

@@ -31,8 +31,7 @@ export async function packSegments(
 		let bytes: Uint8Array;
 		if (s.type === 'base') {
 			expect(s.baseOfs).toBeGreaterThanOrEqual(0);
-			await baseSegs!.seek(s.baseOfs!);
-			bytes = (await baseSegs!.readNext(s.packedLen))!;
+			bytes = (await baseSegs!.readAt(s.baseOfs!, s.packedLen))!;
 		} else if (s.type === 'new') {
 			expect(s.needPacking).toBe(true);
 			const dataToPack = data.subarray(dataOfs, dataOfs+s.contentLen);
@@ -69,7 +68,8 @@ export async function readSegsSequentially(
 	if (contentLength === undefined) {
 		for (const segInfo of reader.segmentInfos()) {
 			const segBytes = allSegs.subarray(
-				segInfo.packedOfs, segInfo.packedOfs + segInfo.packedLen);
+				segInfo.packedOfs, segInfo.packedOfs + segInfo.packedLen
+			);
 			if (segBytes.length === 0) { break; }
 			const isLastSeg = (segBytes.length < segInfo.packedLen);
 			const segContent = await reader.openSeg(segInfo, segBytes);
@@ -84,7 +84,8 @@ export async function readSegsSequentially(
 	} else {
 		for (const segInfo of reader.segmentInfos()) {
 			const segBytes = allSegs.subarray(
-				segInfo.packedOfs, segInfo.packedOfs + segInfo.packedLen);
+				segInfo.packedOfs, segInfo.packedOfs + segInfo.packedLen
+			);
 			const segContent = await reader.openSeg(segInfo, segBytes);
 			expect(segInfo.contentLen).toBe(segContent.length);
 			await arrWriter.write(segInfo.contentOfs, segContent);

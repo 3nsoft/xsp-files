@@ -1,5 +1,5 @@
 /*
- Copyright(c) 2013 - 2018 3NSoft Inc.
+ Copyright(c) 2013 - 2018, 2022 3NSoft Inc.
  
  This program is free software: you can redistribute it and/or modify it under
  the terms of the GNU General Public License as published by the Free Software
@@ -45,17 +45,86 @@ export function compare(
 	}
 }
 
+// XXX
+//  - Can we make a cryptor with workers?
+//    It will allow playing with code to find convenient interface, and to
+//    actually test here that streaming uses parallel processes.
+//  - Every other project simply needs to know what interface is expected by
+//    xsp streaming. Where and how encryption tasks are executed is not of any
+//    concern for streaming lib. But, it should reason about having several
+//    processes and several obj tasks.
+//    We want to parallelize single obj tasks, while distributing resources when
+//    there are many simultaneous obj read/written.
+//  - BatchCryptor ?
+//    To encapsulate own work batches?
+//    And these batches are alway connected to either SegmentsWriter or
+//    SegmentsReader. May be have batch-knowing wrap with state here, powered
+//    by some corrected shared AsyncSBoxCryptor resource.
+
 export function mockCryptor(): AsyncSBoxCryptor {
 	const arrFactory = arrays.makeFactory();
+	const numOfWorkers = 3;
+	const workQueues = new Map<number, number>();
+	function addToWorkQueue(workLabel: number): void {
+		const inQueue = workQueues.get(workLabel);
+		workQueues.set(workLabel, (inQueue ? inQueue+1 : 1));
+	}
+	function removeFromWorkQueue(workLabel: number): void {
+		const inQueue = workQueues.get(workLabel);
+		if (inQueue && (inQueue > 1)) {
+			workQueues.set(workLabel, inQueue-1);
+		} else {
+			workQueues.delete(workLabel);
+		}
+	}
+	function canStartUnderWorkLabel(workLabel: number): number {
+		const maxIdle = numOfWorkers - workQueues.size;
+		if (maxIdle <= 0) {
+			return (workQueues.has(workLabel) ? 0 : 1);
+		}
+		const inQueue = workQueues.get(workLabel);
+		return (inQueue ? Math.max(0, ) : maxIdle);
+	}
+	async function exec<T>(workLabel: number, op: () => T): Promise<T> {
+		addToWorkQueue(workLabel);
+		try {
+			return await onNextTick(op);
+		} finally {
+			removeFromWorkQueue(workLabel);
+		}
+	}
 	const ac: AsyncSBoxCryptor = {
-		open: async (c, n, k) => sbox.open(c, n, k, arrFactory),
-		pack: async (m, n, k) => sbox.pack(m, n, k, arrFactory),
+		canStartUnderWorkLabel,
+		open: (c, n, k, workLabel) => exec(
+			workLabel,
+			() => sbox.open(c, n, k, arrFactory)
+		),
+		pack: (m, n, k, workLabel) => exec(
+			workLabel,
+			() => sbox.pack(m, n, k, arrFactory)
+		),
 		formatWN: {
-			open: async (c, k) => sbox.formatWN.open(c, k, arrFactory),
-			pack: async (m, n, k) => sbox.formatWN.pack(m, n, k, arrFactory),
+			open: (c, k, workLabel) => exec(
+				workLabel,
+				() => sbox.formatWN.open(c, k, arrFactory)
+			),
+			pack: (m, n, k, workLabel) => exec(
+				workLabel,
+				() => sbox.formatWN.pack(m, n, k, arrFactory)
+			)
 		}
 	};
 	return Object.freeze(ac);
+}
+
+async function onNextTick<T>(action: () => T): Promise<T> {
+	return new Promise<T>((resolve, reject) => process.nextTick(() => {
+		try {
+			resolve(action());
+		} catch (err) {
+			reject(err);
+		}
+	}));
 }
 
 export function objSrcFromArrays(

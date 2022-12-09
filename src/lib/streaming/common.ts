@@ -18,9 +18,6 @@
 import { NONCE_LENGTH } from '../utils/crypt-utils';
 import { base64urlSafe } from '../utils/buffer-utils';
 
-/**
- * This interface is a copy of web3n.streaming.ByteSource.
- */
 export interface ByteSource {
 	readAt(pos: number, len: number|undefined): Promise<Uint8Array|undefined>;
 	readNext(len: number|undefined): Promise<Uint8Array|undefined>;
@@ -29,18 +26,12 @@ export interface ByteSource {
 	getPosition(): Promise<number>;
 }
 
-/**
- * This interface is a copy of web3n.streaming.LayoutNewSection.
- */
 export interface LayoutNewSection {
 	src: 'new';
 	ofs: number;
 	len: number|undefined;
 }
 
-/**
- * This interface is a copy of web3n.streaming.LayoutBaseSection.
- */
 export interface LayoutBaseSection {
 	src: 'base';
 	ofs: number;
@@ -48,17 +39,11 @@ export interface LayoutBaseSection {
 	baseOfs: number;
 }
 
-/**
- * This interface is a copy of web3n.streaming.Layout.
- */
 export interface Layout {
 	base?: number,
 	sections: (LayoutBaseSection|LayoutNewSection)[]
 }
 
-/**
- * This interface is a copy of web3n.streaming.ByteSink.
- */
 export interface ByteSink {
 	getSize(): Promise<{ size: number; isEndless: boolean; }>;
 	setSize(size: number|undefined): Promise<void>;

@@ -29,6 +29,7 @@ describe(`Empty base file`, () => {
 	let key: Uint8Array;
 	let zerothNonce: Uint8Array;
 	let baseSrc: ObjSource;
+	const workLabel = 42;
 
 	const payloadFormat = 2;
 
@@ -36,22 +37,29 @@ describe(`Empty base file`, () => {
 		key = await getRandom(KEY_LENGTH);
 		zerothNonce = await getRandom(NONCE_LENGTH);
 		baseSrc = await packToObjSrc(
-			EMPTY_BUFFER, key, zerothNonce, 1, payloadFormat, cryptor);
+			EMPTY_BUFFER, key, zerothNonce, 1, payloadFormat, cryptor, workLabel
+		);
 	});
 
 	itAsync(`new version, but still empty content`, async () => {
 		const newVersion = baseSrc.version + 1;
 		const { byteSink, completion } = await makeStreamSink(
-			key, zerothNonce, newVersion, payloadFormat, cryptor, baseSrc);
+			key, zerothNonce, newVersion, payloadFormat, cryptor, workLabel,
+			baseSrc
+		);
 		await byteSink.done();
 		await compareContent(
-			key, zerothNonce, newVersion, completion, EMPTY_BUFFER, cryptor);
+			key, zerothNonce, newVersion, completion, EMPTY_BUFFER,
+			cryptor, workLabel
+		);
 	});
 
 	itAsync(`new version, and new content in few slices`, async () => {
 		const newVersion = baseSrc.version + 1;
 		const { byteSink, completion } = await makeStreamSink(
-			key, zerothNonce, newVersion, payloadFormat, cryptor, baseSrc);
+			key, zerothNonce, newVersion, payloadFormat, cryptor, workLabel,
+			baseSrc
+		);
 		const newContent = await getRandom(10000);
 		let ofs=0;
 		while (ofs<newContent.length) {
@@ -62,19 +70,25 @@ describe(`Empty base file`, () => {
 		}
 		await byteSink.done();
 		await compareContent(
-			key, zerothNonce, newVersion, completion, newContent, cryptor);
+			key, zerothNonce, newVersion, completion, newContent,
+			cryptor, workLabel
+		);
 	});
 
 	itAsync(`new version, and new content in one`, async () => {
 		const newVersion = baseSrc.version + 1;
 		const { byteSink, completion } = await makeStreamSink(
-			key, zerothNonce, newVersion, payloadFormat, cryptor, baseSrc);
+			key, zerothNonce, newVersion, payloadFormat, cryptor, workLabel,
+			baseSrc
+		);
 		const newContent = await getRandom(100);
 		await byteSink.spliceLayout(0, newContent.length, newContent.length);
 		await byteSink.write(0, newContent);
 		await byteSink.done();
 		await compareContent(
-			key, zerothNonce, newVersion, completion, newContent, cryptor);
+			key, zerothNonce, newVersion, completion, newContent,
+			cryptor, workLabel
+		);
 	});
 
 });
@@ -85,6 +99,7 @@ describe(`Non-empty base file`, () => {
 	let zerothNonce: Uint8Array;
 	let baseContent: Uint8Array;
 	let baseSrc: ObjSource;
+	const workLabel = 42;
 
 	const payloadFormat = 2;
 
@@ -93,24 +108,29 @@ describe(`Non-empty base file`, () => {
 		zerothNonce = await getRandom(NONCE_LENGTH);
 		baseContent = await getRandom(15000);
 		baseSrc = await packToObjSrc(
-			baseContent, key, zerothNonce, 1, payloadFormat, cryptor);
+			baseContent, key, zerothNonce, 1, payloadFormat, cryptor, workLabel
+		);
 	});
 
 	itAsync(`cut base's tail and write no new bytes`, async () => {
 		const newVersion = baseSrc.version + 1;
 		const { byteSink, completion } = await makeStreamSink(
-			key, zerothNonce, newVersion, payloadFormat, cryptor, baseSrc);
+			key, zerothNonce, newVersion, payloadFormat,
+			cryptor, workLabel, baseSrc
+		);
 		await byteSink.setSize(10000);
 		await byteSink.done();
 		await compareContent(
 			key, zerothNonce, newVersion, completion,
-			baseContent.subarray(0, 10000), cryptor);
+			baseContent.subarray(0, 10000), cryptor, workLabel);
 	});
 
 	itAsync(`cut base's tail and insert new bytes into existing bytes`, async () => {
 		const newVersion = baseSrc.version + 1;
 		const { byteSink, completion } = await makeStreamSink(
-			key, zerothNonce, newVersion, payloadFormat, cryptor, baseSrc);
+			key, zerothNonce, newVersion, payloadFormat,
+			cryptor, workLabel, baseSrc
+		);
 		const newContent = await getRandom(10000);
 		await byteSink.setSize(10000);
 		let ofsInNew = 0;
@@ -129,13 +149,17 @@ describe(`Non-empty base file`, () => {
 			baseContent.subarray(1000, 10000)
 		]);
 		await compareContent(
-			key, zerothNonce, newVersion, completion, expectedContent, cryptor);
+			key, zerothNonce, newVersion, completion, expectedContent,
+			cryptor, workLabel
+		);
 	});
 
 	itAsync(`cut base's tail and append new bytes`, async () => {
 		const newVersion = baseSrc.version + 1;
 		const { byteSink, completion } = await makeStreamSink(
-			key, zerothNonce, newVersion, payloadFormat, cryptor, baseSrc);
+			key, zerothNonce, newVersion, payloadFormat,
+			cryptor, workLabel, baseSrc
+		);
 		const newContent = await getRandom(10000);
 		let ofsInSink = 1000;
 		await byteSink.setSize(ofsInSink);
@@ -153,13 +177,17 @@ describe(`Non-empty base file`, () => {
 			newContent
 		]);
 		await compareContent(
-			key, zerothNonce, newVersion, completion, expectedContent, cryptor);
+			key, zerothNonce, newVersion, completion, expectedContent,
+			cryptor, workLabel
+		);
 	});
 
 	itAsync(`splice base and append new bytes`, async () => {
 		const newVersion = baseSrc.version + 1;
 		const { byteSink, completion } = await makeStreamSink(
-			key, zerothNonce, newVersion, payloadFormat, cryptor, baseSrc);
+			key, zerothNonce, newVersion, payloadFormat,
+			cryptor, workLabel, baseSrc
+		);
 		const newContent = await getRandom(10000);
 		await byteSink.spliceLayout(3000, 5000, 0);
 		let ofsInSink = 10000;
@@ -178,7 +206,9 @@ describe(`Non-empty base file`, () => {
 			newContent
 		]);
 		await compareContent(
-			key, zerothNonce, newVersion, completion, expectedContent, cryptor);
+			key, zerothNonce, newVersion, completion, expectedContent,
+			cryptor, workLabel
+		);
 	});
 
 });

@@ -39,12 +39,14 @@ async function testSingleChainHeader(
 	const zerothHeaderNonce = await getRandom(NONCE_LENGTH);
 	const version = 7;
 	const payloadFormat = 2;
+	const workLabel = 42;
 
 	// initialize writer
 	const writer = await makeSegmentsWriter(
 		key, zerothHeaderNonce, version,
 		{ type: 'new', segSize: segSizein256bs, payloadFormat },
-		getRandom, cryptor);
+		getRandom, cryptor, workLabel
+	);
 	expect(writer.version).toBe(version);
 	expect(writer.isEndlessFile).toBe(true);
 	expect(writer.contentLength).toBeUndefined();
@@ -72,7 +74,8 @@ async function testSingleChainHeader(
 
 	// read data from encrypted segments
 	const reader = await makeSegmentsReader(
-		key, zerothHeaderNonce, version, fileHeader, cryptor);
+		key, zerothHeaderNonce, version, fileHeader, cryptor, workLabel
+	);
 	expect(reader.version).toBe(version);
 	expect(reader.isEndlessFile).toBe(false);
 	expect(reader.contentLength).toBe(dataLen);
@@ -87,7 +90,8 @@ async function testSingleChainHeader(
 	// ensure that incorrect version fails the check
 	try {
 		await makeSegmentsReader(
-			key, zerothHeaderNonce, version + 1, fileHeader, cryptor);
+			key, zerothHeaderNonce, version + 1, fileHeader, cryptor, workLabel
+		);
 		fail(`Version checking creation of a reader must fail a wrong version`);
 	} catch (err) {}
 
@@ -95,7 +99,8 @@ async function testSingleChainHeader(
 	// there is an option to create reader without checking version
 	try {
 		await makeSegmentsReader(
-			key, undefined, version + 1, fileHeader, cryptor);
+			key, undefined, version + 1, fileHeader, cryptor, workLabel
+		);
 	} catch (err) {
 		fail(`Creation of a reader ignores version, when zeroth nonce is not given`);
 	}
@@ -104,12 +109,14 @@ async function testSingleChainHeader(
 
 async function packEndlessToFormObjSrc(
 	data: Uint8Array, version: number, segSizein256bs: number,
-	payloadFormat: number, key: Uint8Array, zerothHeaderNonce: Uint8Array
+	payloadFormat: number, key: Uint8Array, zerothHeaderNonce: Uint8Array,
+	workLabel: number
 ): Promise<ObjSource> {
 	const writer = await makeSegmentsWriter(
 		key, zerothHeaderNonce, version,
 		{ type: 'new', segSize: segSizein256bs, payloadFormat },
-		getRandom, cryptor);
+		getRandom, cryptor, workLabel
+	);
 	const header = await writer.packHeader();
 	const segs = await packSegments(writer, data);
 	return objSrcFromArrays(version, header, segs);
@@ -128,12 +135,14 @@ async function testEndlessFile(
 	const zerothHeaderNonce = await getRandom(NONCE_LENGTH);
 	const version = 3;
 	const payloadFormat = 2;
+	const workLabel = 42;
 
 	// initialize writer
 	const writer = await makeSegmentsWriter(
 		key, zerothHeaderNonce, version,
 		{ type: 'new', segSize: segSizein256bs, payloadFormat },
-		getRandom, cryptor);
+		getRandom, cryptor, workLabel
+	);
 	expect(writer.version).toBe(version);
 	expect(writer.isEndlessFile).toBe(true);
 	expect(writer.contentLength).toBeUndefined();
@@ -156,7 +165,8 @@ async function testEndlessFile(
 
 	// read data from encrypted segments of an endless file
 	const reader = await makeSegmentsReader(
-		key, zerothHeaderNonce, version, fileHeader, cryptor);
+		key, zerothHeaderNonce, version, fileHeader, cryptor, workLabel
+	);
 	expect(reader.version).toBe(version);
 	expect(reader.isEndlessFile).toBe(true);
 	expect(reader.contentLength).toBeUndefined();
@@ -171,14 +181,16 @@ async function testEndlessFile(
 	// ensure that incorrect version fails the check
 	try {
 		await makeSegmentsReader(
-			key, zerothHeaderNonce, version + 1, fileHeader, cryptor);
+			key, zerothHeaderNonce, version + 1, fileHeader, cryptor, workLabel
+		);
 		fail(`Version checking creation of a reader must fail a wrong version`);
 	} catch (err) {}
 
 	// there is an option to create reader without checking version
 	try {
 		await makeSegmentsReader(
-			key, undefined, version + 1, fileHeader, cryptor);
+			key, undefined, version + 1, fileHeader, cryptor, workLabel
+		);
 	} catch (err) {
 		fail(`Creation of a reader ignores version, when zeroth nonce is not given`);
 	}
@@ -215,7 +227,8 @@ describe('Packing and reading endless file', () => {
 async function packAndCheckSplicedBytes(
 	writer: SegmentsWriter, key: Uint8Array, zerothHeaderNonce: Uint8Array,
 	baseObj: ObjSource, baseData: Uint8Array, newData: Uint8Array,
-	layout: { src: 'new'|'base'; baseOfs?: number; len: number; }[]
+	layout: { src: 'new'|'base'; baseOfs?: number; len: number; }[],
+	workLabel: number
 ): Promise<void> {
 	// check layout setting, ensuring correct testing
 	{
@@ -244,7 +257,8 @@ async function packAndCheckSplicedBytes(
 
 	// let's read writer's version data and check expectations
 	const reader = await makeSegmentsReader(
-		key, zerothHeaderNonce, writer.version, header, cryptor);
+		key, zerothHeaderNonce, writer.version, header, cryptor, workLabel
+	);
 	const data = await readSegsSequentially(reader, packedNewSegs);
 	let newOfs = 0;
 	let ofs = 0;
@@ -270,6 +284,7 @@ describe(`SegmentsWriter`, () => {
 	const key = getRandomSync(KEY_LENGTH);
 	const zerothHeaderNonce = getRandomSync(NONCE_LENGTH);
 	const payloadFormat = 2;
+	const workLabel = 42;
 
 	itAsync(`changes from endless to finite, when length is deducible and before header is packed`, async () => {
 		const dataLens = [ 3*segSize, 3*(segSize - POLY_LENGTH) ];
@@ -278,7 +293,8 @@ describe(`SegmentsWriter`, () => {
 			const writer = await makeSegmentsWriter(
 				key, zerothHeaderNonce, 1,
 				{ type: 'new', segSize: segSizein256bs, payloadFormat },
-				getRandom, cryptor);
+				getRandom, cryptor, workLabel
+			);
 			expect(writer.isEndlessFile).toBe(true);
 			await packSegments(writer, data);
 			if (dataLen % (segSizein256bs*256) === 0) {
@@ -296,18 +312,23 @@ describe(`SegmentsWriter`, () => {
 		for (const dataLen of dataLens) {
 			const data = await getRandom(dataLen);
 			const objV1 = await packEndlessToFormObjSrc(
-				data, 1, segSizein256bs, payloadFormat, key, zerothHeaderNonce);
+				data, 1, segSizein256bs, payloadFormat, key, zerothHeaderNonce,
+				workLabel
+			);
 
 			// check that reader sees header as one for endless file
 			const reader = await makeSegmentsReader(
-				key, zerothHeaderNonce, 1, await objV1.readHeader(), cryptor);
+				key, zerothHeaderNonce, 1, await objV1.readHeader(), cryptor,
+				workLabel
+			);
 			expect(reader.isEndlessFile).toBe(true);
 
 			// next version writer switches to finite file
 			const writer = await makeSegmentsWriter(
 				key, zerothHeaderNonce, 2,
 				{ type: 'update', base: objV1, payloadFormat },
-				getRandom, cryptor);
+				getRandom, cryptor, workLabel
+			);
 			expect(writer.isEndlessFile).toBe(false);
 			expect(writer.segmentsLength).toBe((await objV1.segSrc.getSize()).size);
 			expect(writer.contentLength).toBe(dataLen);
@@ -318,7 +339,9 @@ describe(`SegmentsWriter`, () => {
 			Promise<{ dataV1: Uint8Array; objV1: ObjSource; }> {
 		const dataV1 = await getRandom(10*segSize + 100);
 		const objV1 = await packEndlessToFormObjSrc(
-			dataV1, 1, segSizein256bs, payloadFormat, key, zerothHeaderNonce);
+			dataV1, 1, segSizein256bs, payloadFormat, key, zerothHeaderNonce,
+			workLabel
+		);
 		return { dataV1, objV1 };
 	}
 
@@ -333,7 +356,8 @@ describe(`SegmentsWriter`, () => {
 			writer = await makeSegmentsWriter(
 				key, zerothHeaderNonce, 2,
 				{ type: 'update', base: objV1, payloadFormat },
-				getRandom, cryptor);
+				getRandom, cryptor, workLabel
+			);
 		});
 
 		itAsync(`cutting over the last segment` , async () => {
@@ -357,7 +381,8 @@ describe(`SegmentsWriter`, () => {
 			await packAndCheckSplicedBytes(
 				writer, key, zerothHeaderNonce, objV1, dataV1, newBytes, [
 					{ src: 'base', baseOfs: 0, len: 10*segSize + 50 }
-				]);
+				], workLabel
+			);
 		});
 
 		itAsync(`cutting between segments` , async () => {
@@ -392,7 +417,8 @@ describe(`SegmentsWriter`, () => {
 			await packAndCheckSplicedBytes(
 				writer, key, zerothHeaderNonce, objV1, dataV1, newBytes, [
 					{ src: 'base', baseOfs: 0, len: 5*segSize + 100 }
-				]);
+				], workLabel
+			);
 		});
 
 		itAsync(`cutting and growing to original size` , async () => {
@@ -421,7 +447,8 @@ describe(`SegmentsWriter`, () => {
 				writer, key, zerothHeaderNonce, objV1, dataV1, newBytes, [
 					{ src: 'base', baseOfs: 0, len: 5*segSize + 100 },
 					{ src: 'new', len: 5*segSize }
-				]);
+				], workLabel
+			);
 		});
 
 		itAsync(`cutting, growing to original size, and cutting over new segment` , async () => {
@@ -451,7 +478,8 @@ describe(`SegmentsWriter`, () => {
 				writer, key, zerothHeaderNonce, objV1, dataV1, newBytes, [
 					{ src: 'base', baseOfs: 0, len: 5*segSize + 100 },
 					{ src: 'new', len: 4*segSize - 100 }
-				]);
+				], workLabel
+			);
 		});
 
 		itAsync(`changes file to endless with undefined length`, async () => {
@@ -473,7 +501,8 @@ describe(`SegmentsWriter`, () => {
 			writer = await makeSegmentsWriter(
 				key, zerothHeaderNonce, 2,
 				{ type: 'update', base: objV1, payloadFormat },
-				getRandom, cryptor);
+				getRandom, cryptor, workLabel
+			);
 		});
 
 		itAsync(`except for being a noop, when zero bytes removed, and zero bytes inserted`, async () => {
@@ -505,7 +534,8 @@ describe(`SegmentsWriter`, () => {
 				writer, key, zerothHeaderNonce, objV1, dataV1, newBytes, [
 					{ src: 'base', baseOfs: 0, len: 2*segSize },
 					{ src: 'base', baseOfs: 3*segSize, len: 7*segSize + 100 }
-				]);
+				], workLabel
+			);
 		});
 
 		itAsync(`by inserting new chain exactly between base segments`, async () => {
@@ -539,7 +569,8 @@ describe(`SegmentsWriter`, () => {
 					{ src: 'base', baseOfs: 0, len: 2*segSize },
 					{ src: 'new', len: segSize },
 					{ src: 'base', baseOfs: 2*segSize, len: 7*segSize + 100 }
-				]);
+				], workLabel
+			);
 		});
 	
 		itAsync(`by cutting out exactly one base segment and inserting new one between base chains`, async () => {
@@ -575,7 +606,8 @@ describe(`SegmentsWriter`, () => {
 					{ src: 'base', baseOfs: 0, len: 2*segSize },
 					{ src: 'new', len: 200 },
 					{ src: 'base', baseOfs: 4*segSize, len: 6*segSize + 100 }
-				]);
+				], workLabel
+			);
 		});
 
 		itAsync(`by cutting out base segment in two chains and inserting new chain there`, async () => {
@@ -623,7 +655,8 @@ describe(`SegmentsWriter`, () => {
 					{ src: 'base', baseOfs: 0, len: 2*segSize-150 },
 					{ src: 'new', len: 200 },
 					{ src: 'base', baseOfs: 4*segSize-150, len: 6*segSize + 250 }
-				]);
+				], workLabel
+			);
 		});
 
 		itAsync(`by cutting out base segment in two chains and inserting new chain there, and cutting again in a new chain`, async () => {
@@ -635,8 +668,6 @@ describe(`SegmentsWriter`, () => {
 			await writer.splice(2*segSize-250, 150, segSize-150);
 			expect(writer.contentLength).toBe(
 				lenBeforeSplice - 150 + (segSize-150));
-			const origSeg1 = dataV1.subarray(segSize, 2*segSize);
-			const origSeg3 = dataV1.subarray(3*segSize, 4*segSize);
 			const segs = Array.from(writer.segmentInfos());
 			expect(segs.length).toBe(11);
 			segs.forEach((s, i) => {
@@ -674,7 +705,8 @@ describe(`SegmentsWriter`, () => {
 					{ src: 'base', baseOfs: 0, len: 2*segSize-250 },
 					{ src: 'new', len: segSize },
 					{ src: 'base', baseOfs: 4*segSize-150, len: 6*segSize + 250 }
-				]);
+				], workLabel
+			);
 		});
 
 		itAsync(`by inserting new chain in a middle of base chain segment`, async () => {
@@ -723,7 +755,8 @@ describe(`SegmentsWriter`, () => {
 					{ src: 'base', baseOfs: 0, len: 2*segSize-100 },
 					{ src: 'new', len: segSize + 200 },
 					{ src: 'base', baseOfs: 2*segSize-100, len: 8*segSize + 200 }
-				]);
+				], workLabel
+			);
 		});
 
 	});
@@ -735,14 +768,16 @@ describe(`SegmentsWriter`, () => {
 			const newWriter = await makeSegmentsWriter(
 				key, zerothHeaderNonce, version,
 				{ type: 'new', segSize: 16, payloadFormat },
-				getRandom, cryptor);
+				getRandom, cryptor, workLabel
+			);
 			await newWriter.setContentLength(6*1024*1024+3456);
 			const header = await newWriter.packHeader();
 	
 			const restartedWriter = await makeSegmentsWriter(
 				key, zerothHeaderNonce, version,
 				{ type: 'restart', header },
-				getRandom, cryptor);
+				getRandom, cryptor, workLabel
+			);
 	
 			await restartedWriter.setContentLength(600)
 			.then(
@@ -760,16 +795,17 @@ describe(`SegmentsWriter`, () => {
 
 	describe(`.segmentInfos()`, () => {
 
-		let dataV1: Uint8Array;
 		let objV1: ObjSource;
 		let writer: SegmentsWriter;
+		const workLabel = 42;
 
 		beforeEachAsync(async () => {
-			({ objV1, dataV1 } = await prepObjV1(10, 100));
+			({ objV1 } = await prepObjV1(10, 100));
 			writer = await makeSegmentsWriter(
 				key, zerothHeaderNonce, 2,
 				{ type: 'update', base: objV1, payloadFormat },
-				getRandom, cryptor);
+				getRandom, cryptor, workLabel
+			);
 		});
 
 		itAsync(`may iterate over all and part of segments`, async () => {

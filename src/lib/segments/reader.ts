@@ -50,6 +50,8 @@ export interface SegmentsReader {
 
 	locateSegsOfs(segsOfs: number): LocationInSegment;
 
+	canStartNumOfOpeningOps(): number;
+
 	openSeg(segId: SegId, segBytes: Uint8Array): Promise<Uint8Array>;
 
 	/**
@@ -83,10 +85,11 @@ function exception(
  * @param header is object's header, from which reader's parameters are
  * initialized.
  * @param cryptor 
+ * @param workLabel
  */
 export async function makeSegmentsReader(
 	key: Uint8Array, zerothHeaderNonce: Uint8Array|undefined, version: number,
-	header: Uint8Array, cryptor: AsyncSBoxCryptor
+	header: Uint8Array, cryptor: AsyncSBoxCryptor, workLabel: number
 ): Promise<SegmentsReader> {
 	if (zerothHeaderNonce) {
 		const headerNonce = header.subarray(0, NONCE_LENGTH);
@@ -95,7 +98,7 @@ export async function makeSegmentsReader(
 		if (version !== nonceDeltaToNumber(delta)) { throw exception(
 			'versionMismatch'); }
 	}
-	return SegReader.makeFor(key, version, header, cryptor);
+	return SegReader.makeFor(key, version, header, cryptor, workLabel);
 }
 
 class SegReader {
@@ -105,12 +108,13 @@ class SegReader {
 	 * is no longer needed.
 	 */
 	private key: Uint8Array;
-	private index: Locations;
+	private readonly index: Locations;
 
 	private constructor(key: Uint8Array,
-		private segs: SegsInfo,
-		public version: number,
-		private cryptor: AsyncSBoxCryptor
+		private readonly segs: SegsInfo,
+		public readonly version: number,
+		private readonly cryptor: AsyncSBoxCryptor,
+		public readonly workLabel: number
 	) {
 		if (key.length !== KEY_LENGTH) { throw new Error(
 			"Given key has wrong size."); }
@@ -121,19 +125,25 @@ class SegReader {
 
 	static async makeFor(
 		key: Uint8Array, version: number, header: Uint8Array,
-		cryptor: AsyncSBoxCryptor
+		cryptor: AsyncSBoxCryptor, workLabel: number
 	): Promise<SegmentsReader> {
-		const headerContent = await cryptor.formatWN.open(header, key);
+		const headerContent = await cryptor.formatWN.open(header, key, workLabel);
 		const segs = readSegsInfoFromHeader(headerContent);
-		return (new SegReader(key, segs, version, cryptor)).wrap();
+		return (new SegReader(key, segs, version, cryptor, workLabel)).wrap();
 	}
 
 	private async openSeg(
 		segId: SegId, segBytes: Uint8Array
 	): Promise<Uint8Array> {
 		const nonce = this.index.segmentNonce(segId);
-		const data = await this.cryptor.open(segBytes, nonce, this.key);
+		const data = await this.cryptor.open(
+			segBytes, nonce, this.key, this.workLabel
+		);
 		return data;
+	}
+
+	private canStartNumOfOpeningOps(): number {
+		return this.cryptor.canStartUnderWorkLabel(this.workLabel);
 	}
 
 	private destroy(): void {
@@ -145,6 +155,7 @@ class SegReader {
 		const wrap: SegmentsReader = {
 			locateContentOfs: pos => this.index.locateContentOfs(pos),
 			locateSegsOfs: segsOfs => this.index.locateSegsOfs(segsOfs),
+			canStartNumOfOpeningOps: this.canStartNumOfOpeningOps.bind(this),
 			openSeg: this.openSeg.bind(this),
 			destroy: this.destroy.bind(this),
 			isEndlessFile: (this.index.totalSegsLen === undefined),
