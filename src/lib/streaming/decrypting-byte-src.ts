@@ -105,7 +105,7 @@ class DecryptingByteSource implements ByteSource {
 		if (contentOfs === 0) {
 			const iter = this.segReader.segmentInfos();
 			this.buffered = undefined;
-			return this.readSegsAndDecrypt(iter, len);
+			return this.readSegsAndDecrypt(iter, len, undefined, 0);
 		}
 		if (this.segReader.contentFiniteLength <= contentOfs) {
 			return Promise.resolve({});
@@ -114,7 +114,6 @@ class DecryptingByteSource implements ByteSource {
 		const l = this.segReader.locateContentOfs(contentOfs);
 		const iter = this.segReader.segmentInfos(l);
 		let fstOpenedSeg: Uint8Array|undefined = undefined;
-		let posInFstEncryptedSeg: number|undefined = undefined;
 		if (this.buffered) {
 			const { chain, seg } = this.buffered.seg;
 			if ((l.chain === chain) && (l.seg === seg)) {
@@ -125,23 +124,19 @@ class DecryptingByteSource implements ByteSource {
 					const tail = this.buffered;
 					this.buffered = undefined;
 					return Promise.resolve({ opened, tail });
+				} else {
+					return this.readSegsAndDecrypt(iter, len, fstOpenedSeg, 0);
 				}
-			} else {
-				posInFstEncryptedSeg = l.posInSeg;
 			}
 			this.buffered = undefined;
 		}
 
-		this.segReader.contentLength
-
-		return this.readSegsAndDecrypt(
-			iter, len, fstOpenedSeg, posInFstEncryptedSeg
-		);
+		return this.readSegsAndDecrypt(iter, len, fstOpenedSeg, l.posInSeg);
 	}
 
 	private async readSegsAndDecrypt(
 		segIter: IterableIterator<SegmentInfo>, len: number|undefined,
-		fstOpenedSeg?: Uint8Array, posInFstSeg = 0
+		fstOpenedSeg: Uint8Array|undefined, posInFstSeg: number
 	): Promise<ReadProcResult> {
 		const openedSegs: Uint8Array[] = [];
 		let adjustFstSeg: boolean;
